@@ -20,6 +20,7 @@ interface RpcResponse {
 }
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
+const RPC_TIMEOUT_MS = 30_000;
 
 class DirectSocket {
     private ws: WebSocket | null = null;
@@ -76,8 +77,15 @@ class DirectSocket {
     }
 
     rpc(id: string, method: string, params?: unknown): Promise<RpcResponse> {
-        return new Promise((resolve) => {
-            this.rpcPending.set(id, resolve);
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.rpcPending.delete(id);
+                reject(new Error(`RPC timeout: ${method}`));
+            }, RPC_TIMEOUT_MS);
+            this.rpcPending.set(id, (res) => {
+                clearTimeout(timer);
+                resolve(res);
+            });
             this.rawSend({ type: 'rpc', id, method, params });
         });
     }

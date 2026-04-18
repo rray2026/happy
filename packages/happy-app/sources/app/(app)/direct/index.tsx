@@ -257,7 +257,7 @@ export default memo(function DirectSessionScreen() {
                 />
                 <TouchableOpacity
                     onPress={handleSend}
-                    disabled={!inputText.trim() || status !== 'connected' || sending}
+                    disabled={!inputText.trim() || status !== 'connected'}
                     style={[
                         styles.sendBtn,
                         (!inputText.trim() || status !== 'connected') && styles.sendBtnDisabled,
