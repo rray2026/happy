@@ -6,6 +6,8 @@ import { SessionEncryption } from "./sessionEncryption";
 import { MachineEncryption } from "./machineEncryption";
 import { encodeBase64, decodeBase64 } from "@/encryption/base64";
 import sodium from '@/encryption/libsodium.lib';
+
+type KeyPair = { publicKey: Uint8Array; privateKey: Uint8Array; keyType: string };
 import { decryptBox, encryptBox } from "@/encryption/libsodium";
 import { randomUUID } from 'expo-crypto';
 
@@ -27,7 +29,7 @@ export class Encryption {
     }
 
     private readonly legacyEncryption: SecretBoxEncryption;
-    private readonly contentKeyPair: sodium.KeyPair;
+    private readonly contentKeyPair: KeyPair;
     readonly anonID: string;
     readonly contentDataKey: Uint8Array;
 
@@ -36,7 +38,7 @@ export class Encryption {
     private machineEncryptions = new Map<string, MachineEncryption>();
     private cache: EncryptionCache;
 
-    private constructor(anonID: string, masterSecret: Uint8Array, contentKeyPair: sodium.KeyPair) {
+    private constructor(anonID: string, masterSecret: Uint8Array, contentKeyPair: KeyPair) {
         this.anonID = anonID;
         this.contentKeyPair = contentKeyPair;
         this.legacyEncryption = new SecretBoxEncryption(masterSecret);

@@ -1,2 +1,2 @@
-import sodium from '@more-tech/react-native-libsodium';
+import sodium from 'libsodium-wrappers';
 export default sodium;

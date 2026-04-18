@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleProp, Text, TextStyle, View, ViewStyle } from 'react-native';
-import { iOSUIKit } from 'react-native-typography';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -108,9 +107,8 @@ export const RoundButton = React.memo((props: { size?: RoundButtonSize, display?
                         <ActivityIndicator color={display.textColor} size='small' />
                     </View>
                 )}
-                <Text 
+                <Text
                     style={[
-                        iOSUIKit.title3, 
                         styles.text,
                         { 
                             marginTop: size.pad, 

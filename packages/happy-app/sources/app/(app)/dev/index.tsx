@@ -286,12 +286,6 @@ export default function DevScreen() {
                     onPress={() => router.push('/dev/unistyles-demo')}
                 />
                 <Item
-                    title="QR Code Test"
-                    subtitle="Test QR code generation with different parameters"
-                    icon={<Ionicons name="qr-code-outline" size={28} color="#007AFF" />}
-                    onPress={() => router.push('/dev/qr-test')}
-                />
-                <Item
                     title="Session Composer"
                     subtitle="New session creation screen layout"
                     icon={<Ionicons name="add-circle-outline" size={28} color="#007AFF" />}
