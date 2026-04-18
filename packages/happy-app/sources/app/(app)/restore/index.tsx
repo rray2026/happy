@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, memo } from 'react';
-import { View, Text, TextInput, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { RoundButton } from '@/components/RoundButton';
@@ -25,42 +25,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         paddingHorizontal: 24,
     },
-    contentWrapper: {
-        width: '100%',
-        maxWidth: layout.maxWidth,
-        paddingVertical: 24,
-    },
-    instructionText: {
-        fontSize: 20,
-        color: theme.colors.text,
-        marginBottom: 24,
-        ...Typography.default(),
-    },
     secondInstructionText: {
         fontSize: 16,
         color: theme.colors.textSecondary,
         marginBottom: 20,
         marginTop: 30,
         ...Typography.default(),
-    },
-    qrInstructions: {
-        fontSize: 14,
-        color: theme.colors.textSecondary,
-        marginBottom: 16,
-        lineHeight: 22,
-        textAlign: 'center',
-        ...Typography.default(),
-    },
-    textInput: {
-        backgroundColor: theme.colors.input.background,
-        padding: 16,
-        borderRadius: 8,
-        marginBottom: 24,
-        fontFamily: 'IBMPlexMono-Regular',
-        fontSize: 14,
-        minHeight: 120,
-        textAlignVertical: 'top',
-        color: theme.colors.input.text,
     },
     divider: {
         height: 1,
@@ -96,10 +66,10 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 function getOrCreateWebappPublicKey(): string {
+    if (Platform.OS !== 'web') return '';
     const KEY = 'webapp_identity';
     let id = localStorage.getItem(KEY);
     if (!id) {
-        // Generate a simple UUID-like identifier
         id = Array.from(crypto.getRandomValues(new Uint8Array(16)))
             .map((b) => b.toString(16).padStart(2, '0'))
             .join('');
@@ -113,9 +83,7 @@ export default memo(function Restore() {
     const styles = stylesheet;
     const auth = useAuth();
     const router = useRouter();
-    const [isWaitingForAuth, setIsWaitingForAuth] = useState(false);
     const [authReady, setAuthReady] = useState(false);
-    const [waitingDots, setWaitingDots] = useState(0);
     const isCancelledRef = useRef(false);
 
     // Direct connect state
@@ -129,27 +97,21 @@ export default memo(function Restore() {
     useEffect(() => {
         const startQRAuth = async () => {
             try {
-                setIsWaitingForAuth(true);
-
-                // Send authentication request
                 const success = await authQRStart(keypair);
                 if (!success) {
                     Modal.alert(t('common.error'), t('errors.authenticationFailed'));
-                    setIsWaitingForAuth(false);
                     return;
                 }
 
                 setAuthReady(true);
 
-                // Start waiting for authentication
                 const credentials = await authQRWait(
                     keypair,
-                    (dots) => setWaitingDots(dots),
+                    () => {},
                     () => isCancelledRef.current
                 );
 
                 if (credentials && !isCancelledRef.current) {
-                    // Convert secret bytes to base64url string for login
                     const secretString = encodeBase64(credentials.secret, 'base64url');
                     await auth.login(credentials.token, secretString);
                     if (!isCancelledRef.current) {
@@ -164,23 +126,19 @@ export default memo(function Restore() {
                     console.error('QR Auth error:', error);
                     Modal.alert(t('common.error'), t('errors.authenticationFailed'));
                 }
-            } finally {
-                if (!isCancelledRef.current) {
-                    setIsWaitingForAuth(false);
-                    setAuthReady(false);
-                }
             }
         };
 
         startQRAuth();
 
-        // Cleanup function
         return () => {
             isCancelledRef.current = true;
         };
     }, [keypair]);
 
     const handleDirectConnect = async () => {
+        if (Platform.OS !== 'web') return;
+
         const trimmed = directJson.trim();
         if (!trimmed) return;
 
@@ -219,7 +177,6 @@ export default memo(function Restore() {
                 directSocket.connectFirstTime(payload, webappPublicKey);
             });
 
-            // Navigate to the direct session screen
             router.push('/direct');
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Unknown error';
@@ -261,31 +218,35 @@ export default memo(function Restore() {
                     }} />
                 </View>
 
-                {/* Direct Connect section */}
-                <View style={styles.divider} />
-                <View style={{ width: '100%', maxWidth: layout.maxWidth, paddingBottom: 40 }}>
-                    <Text style={styles.directTitle}>Connect Directly to CLI</Text>
-                    <Text style={styles.directSubtitle}>
-                        Run <Text style={{ fontFamily: 'IBMPlexMono-Regular' }}>happy serve --claude</Text> on your machine, then paste the JSON payload shown in the terminal below.
-                    </Text>
-                    <TextInput
-                        style={styles.directInput}
-                        placeholder='{"type":"direct","endpoint":"ws://...","nonce":"...",...}'
-                        placeholderTextColor={theme.colors.textSecondary}
-                        value={directJson}
-                        onChangeText={setDirectJson}
-                        multiline
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        spellCheck={false}
-                    />
-                    <RoundButton
-                        title={directConnecting ? 'Connecting…' : 'Connect to CLI'}
-                        onPress={handleDirectConnect}
-                        disabled={directConnecting || !directJson.trim()}
-                        loading={directConnecting}
-                    />
-                </View>
+                {/* Direct Connect section — web only */}
+                {Platform.OS === 'web' && (
+                    <>
+                        <View style={styles.divider} />
+                        <View style={{ width: '100%', maxWidth: layout.maxWidth, paddingBottom: 40 }}>
+                            <Text style={styles.directTitle}>Connect Directly to CLI</Text>
+                            <Text style={styles.directSubtitle}>
+                                Run <Text style={{ fontFamily: 'IBMPlexMono-Regular' }}>happy serve --claude</Text> on your machine, then paste the JSON payload shown in the terminal below.
+                            </Text>
+                            <TextInput
+                                style={styles.directInput}
+                                placeholder='{"type":"direct","endpoint":"ws://...","nonce":"...",...}'
+                                placeholderTextColor={theme.colors.textSecondary}
+                                value={directJson}
+                                onChangeText={setDirectJson}
+                                multiline
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                spellCheck={false}
+                            />
+                            <RoundButton
+                                title={directConnecting ? 'Connecting…' : 'Connect to CLI'}
+                                onPress={handleDirectConnect}
+                                disabled={directConnecting || !directJson.trim()}
+                                loading={directConnecting}
+                            />
+                        </View>
+                    </>
+                )}
             </View>
         </ScrollView>
     );

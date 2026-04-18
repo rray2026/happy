@@ -7,7 +7,6 @@ import {
     KeyboardAvoidingView,
     Platform,
     TouchableOpacity,
-    ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native-unistyles';
@@ -162,7 +161,6 @@ export default memo(function DirectSessionScreen() {
     const [status, setStatus] = useState<DirectSocketStatus>(directSocket.getStatus());
     const [items, setItems] = useState<DisplayItem[]>([]);
     const [inputText, setInputText] = useState('');
-    const [sending, setSending] = useState(false);
     const scrollRef = useRef<ScrollView>(null);
 
     // Subscribe to socket status and messages
@@ -199,10 +197,8 @@ export default memo(function DirectSessionScreen() {
     const handleSend = useCallback(() => {
         const text = inputText.trim();
         if (!text || status !== 'connected') return;
-        setSending(true);
         directSocket.sendInput(text);
         setInputText('');
-        setSending(false);
     }, [inputText, status]);
 
     const handleDisconnect = useCallback(() => {
@@ -221,9 +217,6 @@ export default memo(function DirectSessionScreen() {
                 <View style={styles.statusRow}>
                     <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />
                     <Text style={styles.statusText}>{statusLabel(status)}</Text>
-                    {status === 'connecting' && (
-                        <ActivityIndicator size="small" color="#FF9500" style={{ marginLeft: 6 }} />
-                    )}
                 </View>
                 <TouchableOpacity onPress={handleDisconnect} style={styles.disconnectBtn}>
                     <Ionicons name="close-circle-outline" size={22} color="#FF3B30" />

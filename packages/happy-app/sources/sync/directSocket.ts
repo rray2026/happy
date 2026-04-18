@@ -93,10 +93,6 @@ class DirectSocket {
         return () => this.statusHandlers.delete(handler);
     }
 
-    getLastSeq(): number {
-        return this.lastSeq;
-    }
-
     getStatus(): DirectSocketStatus {
         return this.currentStatus;
     }
