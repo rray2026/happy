@@ -89,7 +89,25 @@ User interface components.
 - QR code display for easy mobile connection
 - Graceful mode switching between interactive and remote
 
-### 4. Core Files
+### 4. Direct Connect Server (`/src/server/`)
+Embedded WebSocket server for relay-free direct connection between CLI and Webapp.
+
+- **`types.ts`**: All WS message types (`WebappMessage`, `CliMessage`, `WsServerHandle`, etc.)
+- **`sessionStore.ts`**: In-memory circular buffer (default 200 entries) for message history; supports delta sync via `getDelta(fromSeq)`
+- **`directAuth.ts`**: Ed25519 keypair generation, QR payload building, nonce verification, session credential sign/verify (TweetNaCl)
+- **`wsServer.ts`**: WebSocket server (listens on `0.0.0.0`); handles first-time and reconnect handshakes, broadcast, RPC dispatch, single-client eviction, 30s ping/pong
+
+**Key Features:**
+- No relay server required — CLI and Webapp connect directly
+- Ed25519-signed session credential stored in Webapp `localStorage`; valid 30 days, enables reconnect without re-scanning QR
+- Circular buffer keeps last 200 messages; delta sent on reconnect from client's `lastSeq`
+- Single active client — new connection evicts the previous one
+
+### 5. Commands (`/src/commands/`)
+
+- **`serve.ts`**: `happy serve [--claude|--gemini] [agentArgs…]` — starts the WS server, displays QR code, spawns the agent subprocess in `stream-json` mode, routes webapp input to agent and agent output to broadcast
+
+### 6. Core Files
 
 - **`index.ts`**: CLI entry point with argument parsing
 - **`persistence.ts`**: Local storage for settings and keys
@@ -106,6 +124,7 @@ User interface components.
 3. **Message Flow**:
    - Interactive mode: User input → PTY → Claude → File watcher → Server
    - Remote mode: Mobile app → Server → Claude SDK → Server → Mobile app
+   - **Direct mode**: Webapp input → WS Server → Agent subprocess (stream-json) → broadcast → Webapp
 
 4. **Permission Handling**:
    - Claude requests permission → MCP server intercepts → Sends to mobile → Mobile responds → MCP approves/denies
@@ -117,6 +136,7 @@ User interface components.
 3. **End-to-end encryption**: All data encrypted before leaving the device
 4. **Session persistence**: Allows resuming sessions across restarts
 5. **Optimistic concurrency**: Handles distributed state updates gracefully
+6. **Direct connect**: Relay-free mode via embedded WS server; credential-based reconnect, circular buffer for gap recovery
 
 ## Security Considerations
 
@@ -124,17 +144,65 @@ User interface components.
 - All communications encrypted using TweetNaCl
 - Challenge-response authentication prevents replay attacks
 - Session isolation through unique session IDs
+- Direct connect: QR nonce expires after 5 minutes; session credential signed with Ed25519, expires after 30 days
 
 ## Dependencies
 
-- Core: Node.js, TypeScript
+- Core: Node.js ≥ 22, TypeScript
 - Claude: `@anthropic-ai/claude-code` SDK
-- Networking: Socket.IO client, Axios
+- Networking: Socket.IO client, Axios, `ws` (embedded WS server)
 - Crypto: TweetNaCl
 - Terminal: node-pty, chalk, qrcode-terminal
 - Validation: Zod
-- Testing: Vitest 
+- Testing: Vitest
 
+
+# Running `happy serve` (Direct Connect)
+
+```bash
+# LAN / localhost
+./bin/happy.mjs serve --claude
+
+# Public domain (TLS terminated by nginx/caddy)
+HAPPY_SERVE_ENDPOINT=wss://your-domain.com/happy ./bin/happy.mjs serve --claude
+
+# Custom port
+HAPPY_SERVE_PORT=8080 ./bin/happy.mjs serve --claude
+
+# Gemini agent
+./bin/happy.mjs serve --gemini
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HAPPY_SERVE_PORT` | `4000` | Local port the WS server binds to |
+| `HAPPY_SERVE_ENDPOINT` | `ws://localhost:4000` | Endpoint written into the QR payload (what the Webapp actually connects to) |
+
+## Direct Connect Protocol Summary
+
+```
+CLI                                  Webapp
+────────────────────────────────────────────
+startWsServer()
+displayQRCode(qrPayload)
+                     ←── new WebSocket(endpoint)
+                     ←── { type:"hello", nonce, webappPublicKey }   # first-time
+→ { type:"welcome", sessionId, currentSeq, sessionCredential }
+→ { type:"message", seq, payload }…                                 # delta
+
+                     ←── { type:"hello", sessionCredential, lastSeq } # reconnect
+→ { type:"welcome", … }
+→ delta from lastSeq+1
+
+                     ←── { type:"input", text }
+spawn agent(text) →
+→ { type:"message", seq, payload }…                                 # stream-json events
+
+→ { type:"ping" }
+                     ←── { type:"pong" }
+```
 
 # Running the Daemon
 
