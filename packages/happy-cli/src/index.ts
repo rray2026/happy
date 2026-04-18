@@ -33,6 +33,7 @@ import { extractNoSandboxFlag } from './utils/sandboxFlags'
 import { handleResumeCommand } from '@/resume/handleResumeCommand'
 import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
+import { handleServeCommand } from './commands/serve'
 
 
 (async () => {
@@ -437,6 +438,15 @@ import { handleCodexCommand } from './commands/codexCommand'
       if (process.env.DEBUG) {
         console.error(error)
       }
+      process.exit(1)
+    }
+    return;
+  } else if (subcommand === 'serve') {
+    try {
+      await handleServeCommand(args.slice(1))
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) console.error(error)
       process.exit(1)
     }
     return;

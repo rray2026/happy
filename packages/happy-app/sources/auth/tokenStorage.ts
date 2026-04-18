@@ -2,6 +2,16 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 const AUTH_KEY = 'auth_credentials';
+const DIRECT_KEY = 'direct_credentials';
+
+export interface DirectCredentials {
+    endpoint: string;
+    cliPublicKey: string;
+    sessionId: string;
+    sessionCredential: string;
+    lastSeq: number;
+    webappPublicKey: string;
+}
 
 // Cache for synchronous access
 let credentialsCache: string | null = null;
@@ -44,7 +54,7 @@ export const TokenStorage = {
     },
 
     async removeCredentials(): Promise<boolean> {
-        if (Platform.OS === 'web') {    
+        if (Platform.OS === 'web') {
             localStorage.removeItem(AUTH_KEY);
             return true;
         }
@@ -56,5 +66,27 @@ export const TokenStorage = {
             console.error('Error removing credentials:', error);
             return false;
         }
+    },
+
+    // Direct credentials are web-only (localStorage) — direct connect is a webapp feature
+    getDirectCredentials(): DirectCredentials | null {
+        if (Platform.OS !== 'web') return null;
+        const raw = localStorage.getItem(DIRECT_KEY);
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw) as DirectCredentials;
+        } catch {
+            return null;
+        }
+    },
+
+    setDirectCredentials(creds: DirectCredentials): void {
+        if (Platform.OS !== 'web') return;
+        localStorage.setItem(DIRECT_KEY, JSON.stringify(creds));
+    },
+
+    removeDirectCredentials(): void {
+        if (Platform.OS !== 'web') return;
+        localStorage.removeItem(DIRECT_KEY);
     },
 };

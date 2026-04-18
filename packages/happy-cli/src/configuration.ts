@@ -26,6 +26,10 @@ class Configuration {
 
   public readonly isExperimentalEnabled: boolean
   public readonly disableCaffeinate: boolean
+  /** Port for the embedded direct-connect WebSocket server (happy serve) */
+  public readonly servePort: number
+  /** Public WebSocket endpoint advertised in the QR code (happy serve) */
+  public readonly serveEndpoint: string | null
 
   constructor() {
     // Server configuration - priority: parameter > environment > default
@@ -53,6 +57,8 @@ class Configuration {
 
     this.isExperimentalEnabled = ['true', '1', 'yes'].includes(process.env.HAPPY_EXPERIMENTAL?.toLowerCase() || '');
     this.disableCaffeinate = ['true', '1', 'yes'].includes(process.env.HAPPY_DISABLE_CAFFEINATE?.toLowerCase() || '');
+    this.servePort = parseInt(process.env.HAPPY_SERVE_PORT ?? '4000', 10);
+    this.serveEndpoint = process.env.HAPPY_SERVE_ENDPOINT ?? null;
 
     this.currentCliVersion = packageJson.version
 
