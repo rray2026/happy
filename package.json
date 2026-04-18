@@ -49,5 +49,8 @@
             "sharp"
         ]
     },
-    "packageManager": "pnpm@10.11.0"
+    "packageManager": "pnpm@10.11.0",
+    "devDependencies": {
+        "wrangler": "^3.90.0"
+    }
 }
