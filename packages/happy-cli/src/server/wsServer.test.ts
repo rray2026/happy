@@ -135,7 +135,7 @@ describe('wsServer', () => {
     }
 
     function client(port: number): TestClient {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        const ws = new WebSocket(`ws://0.0.0.0:${port}`);
         const collector = createCollector(ws);
         const tc: TestClient = { ws, collector };
         clients.push(tc);

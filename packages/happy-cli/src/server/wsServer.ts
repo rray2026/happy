@@ -36,7 +36,7 @@ export function startWsServer(opts: {
     let activeClient: WebSocket | null = null;
     let pingTimer: NodeJS.Timeout | null = null;
 
-    const wss = new WebSocketServer({ host: '127.0.0.1', port });
+    const wss = new WebSocketServer({ host: '0.0.0.0', port });
 
     function send(ws: WebSocket, msg: CliMessage): void {
         if (ws.readyState === WebSocket.OPEN) {
