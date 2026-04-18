@@ -15,9 +15,9 @@ import type {
 const PING_INTERVAL_MS = 30_000;
 
 /**
- * Start an embedded WebSocket server that listens on localhost only.
- * An nginx/caddy reverse proxy on the user's machine is responsible for
- * TLS termination and forwarding traffic to this port.
+ * Start an embedded WebSocket server that listens on all interfaces (0.0.0.0).
+ * For public exposure, an nginx/caddy reverse proxy on the user's machine is
+ * responsible for TLS termination and forwarding traffic to this port.
  *
  * Only one webapp client is supported at a time. A new connection will
  * disconnect the previous one.
