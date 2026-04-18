@@ -310,6 +310,14 @@ export default function RootLayout() {
                     headerBackTitle: t('common.back'),
                 }}
             />
+            <Stack.Screen
+                name="direct/index"
+                options={{
+                    headerShown: true,
+                    headerTitle: 'Direct Connect',
+                    headerBackTitle: t('common.back'),
+                }}
+            />
         </Stack>
     );
 }
