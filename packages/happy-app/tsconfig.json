@@ -38,6 +38,12 @@
   ],
   "exclude": [
     "sources/trash/**/*",
-    "node_modules"
+    "node_modules",
+    "**/*.native.ts",
+    "**/*.native.tsx",
+    "**/*.ios.ts",
+    "**/*.ios.tsx",
+    "**/*.android.ts",
+    "**/*.android.tsx"
   ]
 }
