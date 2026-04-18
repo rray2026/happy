@@ -1,0 +1,63 @@
+name: Deploy to Cloudflare Pages
+
+on:
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: 'APP_ENV passed to the build'
+                required: true
+                default: production
+                type: choice
+                options:
+                    - production
+                    - preview
+                    - development
+
+# Only one deploy runs at a time; new runs cancel older pending ones.
+concurrency:
+    group: deploy-cloudflare-pages-${{ github.event.inputs.environment }}
+    cancel-in-progress: true
+
+jobs:
+    deploy:
+        name: Build & Deploy (${{ github.event.inputs.environment }})
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: read
+            deployments: write
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install pnpm
+              uses: pnpm/action-setup@v4
+              # reads packageManager field from root package.json
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build web app
+              working-directory: packages/happy-app
+              run: npx expo export --platform web
+              env:
+                  APP_ENV: ${{ github.event.inputs.environment }}
+                  EXPO_PUBLIC_POSTHOG_API_KEY: ${{ secrets.EXPO_PUBLIC_POSTHOG_API_KEY }}
+
+            - name: Deploy to Cloudflare Pages
+              uses: cloudflare/wrangler-action@v3
+              with:
+                  apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  command: >
+                      pages deploy packages/happy-app/dist
+                      --project-name=${{ vars.CF_PAGES_PROJECT_NAME }}
+                      --branch=${{ github.event.inputs.environment == 'production' && 'main' || github.event.inputs.environment }}
+                      --commit-dirty=true
