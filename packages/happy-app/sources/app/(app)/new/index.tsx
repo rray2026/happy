@@ -15,7 +15,6 @@ import {
     NativeSyntheticEvent,
     Image as RNImage,
 } from 'react-native';
-import { GlassView } from 'expo-glass-effect';
 import { Ionicons, Octicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Typography } from '@/constants/Typography';
@@ -361,13 +360,10 @@ function PathPickerContent({
                         accessibilityRole="button"
                         accessibilityLabel="Done"
                     >
-                        <GlassView
-                            glassEffectStyle="regular"
-                            tintColor="rgba(255,255,255,0.10)"
-                            isInteractive={true}
+                        <View
                             style={[
                                 pickerStyles.doneButtonGlass,
-                                { borderColor: 'rgba(255,255,255,0.16)' },
+                                { borderColor: 'rgba(255,255,255,0.16)', backgroundColor: 'rgba(255,255,255,0.10)' },
                             ]}
                         >
                             <Ionicons
@@ -375,7 +371,7 @@ function PathPickerContent({
                                 size={20}
                                 color={doneIconColor}
                             />
-                        </GlassView>
+                        </View>
                     </Pressable>
                 )}
             </View>
