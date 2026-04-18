@@ -1,69 +1,18 @@
-import React, { useState, useEffect, useRef, memo } from 'react';
-import { View, Text, TextInput, ScrollView, ActivityIndicator, Platform } from 'react-native';
+import React, { useState, memo } from 'react';
+import { View, Text, TextInput, ScrollView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { RoundButton } from '@/components/RoundButton';
 import { Typography } from '@/constants/Typography';
-import { encodeBase64 } from '@/encryption/base64';
-import { generateAuthKeyPair, authQRStart } from '@/auth/authQRStart';
-import { authQRWait } from '@/auth/authQRWait';
+import { decodeBase64 } from '@/encryption/base64';
+import { authGetToken } from '@/auth/authGetToken';
+import { normalizeSecretKey } from '@/auth/secretKeyBackup';
 import { layout } from '@/components/layout';
 import { Modal } from '@/modal';
-import { t } from '@/text';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { QRCode } from '@/components/qr/QRCode';
 import { directSocket, type DirectQRPayload } from '@/sync/directSocket';
 import { TokenStorage } from '@/auth/tokenStorage';
-
-const stylesheet = StyleSheet.create((theme) => ({
-    scrollView: {
-        flex: 1,
-        backgroundColor: theme.colors.surface,
-    },
-    container: {
-        flex: 1,
-        alignItems: 'center',
-        paddingHorizontal: 24,
-    },
-    secondInstructionText: {
-        fontSize: 16,
-        color: theme.colors.textSecondary,
-        marginBottom: 20,
-        marginTop: 30,
-        ...Typography.default(),
-    },
-    divider: {
-        height: 1,
-        backgroundColor: theme.colors.border,
-        marginVertical: 32,
-        width: '100%',
-    },
-    directTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: theme.colors.text,
-        marginBottom: 8,
-        ...Typography.default('semiBold'),
-    },
-    directSubtitle: {
-        fontSize: 14,
-        color: theme.colors.textSecondary,
-        marginBottom: 16,
-        lineHeight: 20,
-        ...Typography.default(),
-    },
-    directInput: {
-        backgroundColor: theme.colors.input.background,
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 16,
-        fontFamily: 'IBMPlexMono-Regular',
-        fontSize: 12,
-        minHeight: 80,
-        textAlignVertical: 'top',
-        color: theme.colors.input.text,
-    },
-}));
+import { useHappyAction } from '@/hooks/useHappyAction';
 
 function getOrCreateWebappPublicKey(): string {
     if (Platform.OS !== 'web') return '';
@@ -83,64 +32,39 @@ export default memo(function Restore() {
     const styles = stylesheet;
     const auth = useAuth();
     const router = useRouter();
-    const [authReady, setAuthReady] = useState(false);
-    const isCancelledRef = useRef(false);
 
-    // Direct connect state
+    const [restoreKey, setRestoreKey] = useState('');
     const [directJson, setDirectJson] = useState('');
-    const [directConnecting, setDirectConnecting] = useState(false);
 
-    // Memoize keypair generation to prevent re-creating on re-renders
-    const keypair = React.useMemo(() => generateAuthKeyPair(), []);
+    const [restoreLoading, handleRestore] = useHappyAction(async () => {
+        const trimmed = restoreKey.trim();
+        if (!trimmed) {
+            Modal.alert('Error', 'Please enter your secret key.');
+            return;
+        }
 
-    // Start QR authentication when component mounts
-    useEffect(() => {
-        const startQRAuth = async () => {
-            try {
-                const success = await authQRStart(keypair);
-                if (!success) {
-                    Modal.alert(t('common.error'), t('errors.authenticationFailed'));
-                    return;
-                }
+        let secretBase64: string;
+        try {
+            secretBase64 = normalizeSecretKey(trimmed);
+        } catch {
+            Modal.alert('Error', 'Invalid secret key format. Please check and try again.');
+            return;
+        }
 
-                setAuthReady(true);
+        const secretBytes = decodeBase64(secretBase64, 'base64url');
+        const token = await authGetToken(secretBytes);
+        await auth.login(token, secretBase64);
+        router.back();
+    });
 
-                const credentials = await authQRWait(
-                    keypair,
-                    () => {},
-                    () => isCancelledRef.current
-                );
-
-                if (credentials && !isCancelledRef.current) {
-                    const secretString = encodeBase64(credentials.secret, 'base64url');
-                    await auth.login(credentials.token, secretString);
-                    if (!isCancelledRef.current) {
-                        router.back();
-                    }
-                } else if (!isCancelledRef.current) {
-                    Modal.alert(t('common.error'), t('errors.authenticationFailed'));
-                }
-
-            } catch (error) {
-                if (!isCancelledRef.current) {
-                    console.error('QR Auth error:', error);
-                    Modal.alert(t('common.error'), t('errors.authenticationFailed'));
-                }
-            }
-        };
-
-        startQRAuth();
-
-        return () => {
-            isCancelledRef.current = true;
-        };
-    }, [keypair]);
-
-    const handleDirectConnect = async () => {
+    const [directConnecting, handleDirectConnect] = useHappyAction(async () => {
         if (Platform.OS !== 'web') return;
 
         const trimmed = directJson.trim();
-        if (!trimmed) return;
+        if (!trimmed) {
+            Modal.alert('Error', 'Please paste the JSON payload from the CLI terminal.');
+            return;
+        }
 
         let payload: DirectQRPayload;
         try {
@@ -151,7 +75,7 @@ export default memo(function Restore() {
         }
 
         if (payload.type !== 'direct') {
-            Modal.alert('Error', 'This QR payload is not a direct-connect payload (type must be "direct").');
+            Modal.alert('Error', 'This payload is not a direct-connect payload (type must be "direct").');
             return;
         }
 
@@ -160,62 +84,50 @@ export default memo(function Restore() {
             return;
         }
 
-        setDirectConnecting(true);
-        try {
-            const webappPublicKey = getOrCreateWebappPublicKey();
+        const webappPublicKey = getOrCreateWebappPublicKey();
 
-            await new Promise<void>((resolve, reject) => {
-                const cleanup = directSocket.onStatusChange((status) => {
-                    if (status === 'connected') {
-                        cleanup();
-                        resolve();
-                    } else if (status === 'error') {
-                        cleanup();
-                        reject(new Error('Connection failed — check that the CLI server is reachable.'));
-                    }
-                });
-                directSocket.connectFirstTime(payload, webappPublicKey);
+        await new Promise<void>((resolve, reject) => {
+            const cleanup = directSocket.onStatusChange((status) => {
+                if (status === 'connected') {
+                    cleanup();
+                    resolve();
+                } else if (status === 'error') {
+                    cleanup();
+                    reject(new Error('Connection failed — check that the CLI server is reachable.'));
+                }
             });
+            directSocket.connectFirstTime(payload, webappPublicKey);
+        });
 
-            router.push('/direct');
-        } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'Unknown error';
-            Modal.alert('Connection Failed', message);
-            directSocket.disconnect();
-        } finally {
-            setDirectConnecting(false);
-        }
-    };
+        router.push('/direct');
+    });
 
     return (
         <ScrollView style={styles.scrollView} contentContainerStyle={{ flexGrow: 1 }}>
             <View style={styles.container}>
 
-                <View style={{justifyContent: 'flex-end' }}>
-                    <Text style={styles.secondInstructionText}>
-                        1. Open Happy on your mobile device{'\n'}
-                        2. Go to Settings → Account{'\n'}
-                        3. Tap "Link New Device"{'\n'}
-                        4. Scan this QR code
+                {/* Secret key restore */}
+                <View style={{ width: '100%', maxWidth: layout.maxWidth, paddingTop: 32, paddingBottom: 8 }}>
+                    <Text style={styles.sectionTitle}>Restore with Secret Key</Text>
+                    <Text style={styles.sectionSubtitle}>
+                        Enter your backup secret key to restore your account.
                     </Text>
-                </View>
-                {!authReady && (
-                    <View style={{ width: 200, height: 200, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
-                        <ActivityIndicator size="small" color={theme.colors.text} />
-                    </View>
-                )}
-                {authReady && (
-                    <QRCode
-                        data={'happy:///account?' + encodeBase64(keypair.publicKey, 'base64url')}
-                        size={300}
-                        foregroundColor={'black'}
-                        backgroundColor={'white'}
+                    <TextInput
+                        style={[styles.input, { color: theme.colors.input.text }]}
+                        placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+                        placeholderTextColor={theme.colors.textSecondary}
+                        value={restoreKey}
+                        onChangeText={setRestoreKey}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        spellCheck={false}
                     />
-                )}
-                <View style={{ flexGrow: 4, paddingTop: 30 }}>
-                    <RoundButton title="Restore with Secret Key Instead" display='inverted' onPress={() => {
-                        router.push('/restore/manual');
-                    }} />
+                    <RoundButton
+                        title={restoreLoading ? 'Restoring…' : 'Restore Account'}
+                        onPress={handleRestore}
+                        disabled={restoreLoading || !restoreKey.trim()}
+                        loading={restoreLoading}
+                    />
                 </View>
 
                 {/* Direct Connect section — web only */}
@@ -223,12 +135,12 @@ export default memo(function Restore() {
                     <>
                         <View style={styles.divider} />
                         <View style={{ width: '100%', maxWidth: layout.maxWidth, paddingBottom: 40 }}>
-                            <Text style={styles.directTitle}>Connect Directly to CLI</Text>
-                            <Text style={styles.directSubtitle}>
+                            <Text style={styles.sectionTitle}>Connect Directly to CLI</Text>
+                            <Text style={styles.sectionSubtitle}>
                                 Run <Text style={{ fontFamily: 'IBMPlexMono-Regular' }}>happy serve --claude</Text> on your machine, then paste the JSON payload shown in the terminal below.
                             </Text>
                             <TextInput
-                                style={styles.directInput}
+                                style={[styles.input, styles.multilineInput, { color: theme.colors.input.text }]}
                                 placeholder='{"type":"direct","endpoint":"ws://...","nonce":"...",...}'
                                 placeholderTextColor={theme.colors.textSecondary}
                                 value={directJson}
@@ -251,3 +163,47 @@ export default memo(function Restore() {
         </ScrollView>
     );
 });
+
+const stylesheet = StyleSheet.create((theme) => ({
+    scrollView: {
+        flex: 1,
+        backgroundColor: theme.colors.surface,
+    },
+    container: {
+        flex: 1,
+        alignItems: 'center',
+        paddingHorizontal: 24,
+    },
+    sectionTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: theme.colors.text,
+        marginBottom: 8,
+        ...Typography.default('semiBold'),
+    },
+    sectionSubtitle: {
+        fontSize: 14,
+        color: theme.colors.textSecondary,
+        marginBottom: 16,
+        lineHeight: 20,
+        ...Typography.default(),
+    },
+    input: {
+        backgroundColor: theme.colors.input.background,
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 16,
+        fontFamily: 'IBMPlexMono-Regular',
+        fontSize: 13,
+    },
+    multilineInput: {
+        minHeight: 80,
+        textAlignVertical: 'top',
+    },
+    divider: {
+        height: 1,
+        backgroundColor: theme.colors.divider,
+        marginVertical: 32,
+        width: '100%',
+    },
+}));

@@ -325,7 +325,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 16,
         paddingVertical: 10,
         borderBottomWidth: 1,
-        borderBottomColor: theme.colors.border,
+        borderBottomColor: theme.colors.divider,
         backgroundColor: theme.colors.header.background,
     },
     statusRow: {
@@ -431,7 +431,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderTopWidth: 1,
-        borderTopColor: theme.colors.border,
+        borderTopColor: theme.colors.divider,
         backgroundColor: theme.colors.surface,
         gap: 8,
     },

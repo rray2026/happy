@@ -138,14 +138,6 @@ export default function RootLayout() {
                 }}
             />
             <Stack.Screen
-                name="restore/manual"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('navigation.restoreWithSecretKey'),
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
                 name="changelog"
                 options={{
                     headerShown: true,
