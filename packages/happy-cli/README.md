@@ -83,6 +83,7 @@ happy connect status
 | `happy resume <id>` | Resume a previous session |
 | `happy notify` | Send push notification to your devices |
 | `happy doctor` | Diagnostics & troubleshooting |
+| `happy serve` | Start a direct-connect WebSocket server (no relay) |
 
 ---
 
@@ -117,9 +118,56 @@ yarn install
 yarn workspace happy cli --help
 ```
 
+## Direct Connect (No Server Required)
+
+`happy serve` starts an embedded WebSocket server on your machine. The web app connects directly to your CLI — no relay server, no account needed.
+
+```bash
+happy serve           # Claude (default)
+happy serve --gemini  # Gemini
+```
+
+Then open the Happy web app, go to **Settings → Account → Link New Device**, paste the JSON payload shown in the terminal, and click **Connect to CLI**.
+
+### LAN / Localhost
+
+Works out of the box. The QR payload uses `ws://localhost:4000` by default.
+
+### Public Domain (via nginx/caddy)
+
+Point a domain at your machine and set the endpoint:
+
+```bash
+HAPPY_SERVE_ENDPOINT=wss://your-domain.com/happy happy serve
+```
+
+Minimal nginx config:
+
+```nginx
+location /happy {
+    proxy_pass http://localhost:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+### Direct Connect Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HAPPY_SERVE_PORT` | `4000` | Local port to bind |
+| `HAPPY_SERVE_ENDPOINT` | `ws://localhost:4000` | Endpoint written into the QR (what the browser connects to) |
+
+### Reconnect
+
+After the first scan the web app stores a signed credential (valid 30 days). Subsequent visits reconnect automatically — no re-scanning needed. The CLI keeps the last 200 messages in memory so the app catches up on reconnect.
+
+---
+
 ## Requirements
 
-- Node.js >= 20.0.0
+- Node.js >= 22.0.0
 - For Claude: `claude` CLI installed & logged in
 - For Codex: `codex` CLI installed & logged in
 - For Gemini: `npm install -g @google/gemini-cli` + `happy connect gemini`
