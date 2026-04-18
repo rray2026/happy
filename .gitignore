@@ -42,6 +42,9 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# Node.js compile cache
+node-compile-cache/
+
 .claude/settings.local.json
 .claude/*.lock
 .plan
