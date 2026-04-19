@@ -146,6 +146,13 @@ export default function RootLayout() {
                     headerTitle: 'Developer Tools',
                 }}
             />
+            <Stack.Screen
+                name="dev/logs"
+                options={{
+                    headerTitle: 'Logs',
+                    headerBackTitle: 'Dev',
+                }}
+            />
 
             <Stack.Screen
                 name="dev/list-demo"
