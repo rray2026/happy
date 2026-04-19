@@ -21,7 +21,7 @@ export default function DevScreen() {
     const [verboseLogging, setVerboseLogging] = useLocalSettingMutable('verboseLogging');
     const [consoleLoggingEnabled, setConsoleLoggingEnabled] = useLocalSettingMutable('consoleLoggingEnabled');
     const socketStatus = useSocketStatus();
-    const anonymousId = sync.encryption!.anonID;
+    const anonymousId = sync.encryption?.anonID ?? '(not authenticated)';
     const { theme } = useUnistyles();
 
     const handleEditServerUrl = async () => {
