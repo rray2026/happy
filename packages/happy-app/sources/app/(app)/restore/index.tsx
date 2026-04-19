@@ -87,6 +87,21 @@ export default memo(function Restore() {
             return;
         }
 
+        // Browsers block ws:// connections from https:// pages (mixed content).
+        // Detect early and show an actionable error instead of a silent onerror.
+        if (
+            typeof window !== 'undefined' &&
+            window.location.protocol === 'https:' &&
+            payload.endpoint.startsWith('ws://')
+        ) {
+            console.error('[DirectConnect] Mixed content blocked: page is HTTPS but endpoint is ws://', payload.endpoint);
+            Modal.alert(
+                'Connection Blocked',
+                'This page is served over HTTPS, so the browser blocks unencrypted ws:// connections.\n\nSet HAPPY_SERVE_ENDPOINT=wss://your-domain.com and restart `happy serve`, or open the webapp over HTTP.'
+            );
+            return;
+        }
+
         const webappPublicKey = getOrCreateWebappPublicKey();
         console.log('[DirectConnect] Connecting to endpoint:', payload.endpoint, '| publicKey:', webappPublicKey.slice(0, 8) + '…');
 

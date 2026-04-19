@@ -179,8 +179,14 @@ class DirectSocket {
             ws.onerror = (event) => {
                 console.error(TAG, 'ws.onerror fired — endpoint was:', this.endpoint,
                     '| event:', JSON.stringify(event));
+                const isMixedContent =
+                    typeof window !== 'undefined' &&
+                    window.location.protocol === 'https:' &&
+                    this.endpoint.startsWith('ws://');
                 // onclose fires after onerror, so we just update status here
-                this.lastErrorReason = 'WebSocket connection failed — check that the CLI server is reachable';
+                this.lastErrorReason = isMixedContent
+                    ? 'Mixed content blocked: page is HTTPS but endpoint is ws://. Use wss:// or open the webapp over HTTP.'
+                    : 'WebSocket connection failed — check that the CLI server is reachable and the port is open';
                 this.setStatus('error');
             };
         } catch (e) {
