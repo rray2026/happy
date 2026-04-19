@@ -5,16 +5,23 @@
  * over stdin/stdout (ndJSON). Keeps the process alive between prompts
  * so conversation context is preserved across turns.
  *
- * Protocol flow:
- *   → initialize({protocolVersion, clientInfo, capabilities})
- *   ← result: {sessionId, ...}
- *   → newSession({cwd, mcpServers: []})
- *   ← result: {sessionId}
- *   → prompt({sessionId, prompt: [{type:'text', text}]})   (per user message)
- *   ← sessionUpdate notifications (streaming chunks)
- *      update.sessionUpdate = 'agent_message_chunk' → textDelta
- *      update.sessionUpdate = 'tool_call'           → tool usage
- *   ← requestPermission (server→client, forwarded to webapp via onPermissionRequest callback)
+ * Protocol flow (gemini-cli 0.38+):
+ *   → initialize({protocolVersion: 1, clientInfo, capabilities})
+ *   ← result: {protocolVersion, authMethods, agentInfo, agentCapabilities}
+ *   → session/new({cwd, mcpServers: []})
+ *   ← result: {sessionId, modes}
+ *   → session/prompt({sessionId, prompt: [{type:'text', text}]})  (per user message)
+ *   ← session/update notifications (streaming):
+ *      update.sessionUpdate = 'agent_message_chunk'  → text delta (content.text)
+ *      update.sessionUpdate = 'agent_thought_chunk'  → thinking text (content.text)
+ *      update.sessionUpdate = 'tool_call'            → tool start (toolCallId, title, kind, status:'in_progress')
+ *      update.sessionUpdate = 'tool_call_update'     → tool result (toolCallId, status:'completed'|'failed', content[])
+ *   ← session/request_permission (server→client, forwarded to webapp)
+ *      params: {sessionId, toolCall:{toolCallId,title,kind,content,locations}, options:[{optionId,name,kind}]}
+ *      respond with: {optionId: 'proceed_always'|'proceed_once'|'cancel'}
+ *   ← session/prompt result: {stopReason}  → turn complete
+ *
+ * All events are converted to Claude stream-json compatible format for the webapp.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -46,31 +53,72 @@ export type BroadcastFn = (event: unknown) => void;
 export type PermissionRequestFn = (permissionId: string, toolName: string, input: unknown) => Promise<boolean>;
 
 /**
- * Convert an ACP session update into a Claude-compatible broadcast event.
- * Returns a special `{_acpChunk: true, text}` marker for text deltas that
- * the caller accumulates before emitting the final `assistant` event.
+ * Convert a Gemini ACP session/update notification into a Claude stream-json
+ * compatible broadcast event.
+ *
+ * Returns one of:
+ *   {_acpChunk: true, text}  — text delta; caller accumulates and flushes later
+ *   Claude-format event      — broadcast immediately
+ *   null                     — ignore (unknown / non-renderable update kind)
  */
 function updateToEvent(update: Record<string, unknown>): unknown | null {
     const kind = update.sessionUpdate as string | undefined;
 
+    // ── Text delta ────────────────────────────────────────────────────────────
     if (kind === 'agent_message_chunk') {
-        // v0.38+: text lives in content.text
+        // v0.38+: text lives in content.text; older versions used messageChunk.textDelta
         const text = (update.content as { text?: string } | undefined)?.text
             ?? (update.messageChunk as { textDelta?: string } | undefined)?.textDelta;
         if (!text) return null;
         return { _acpChunk: true, text };
     }
 
+    // ── Thinking / reasoning ──────────────────────────────────────────────────
+    if (kind === 'agent_thought_chunk') {
+        const text = (update.content as { text?: string } | undefined)?.text;
+        if (!text) return null;
+        // Claude format: { type: 'thinking', thinking: string }
+        return { type: 'thinking', thinking: text };
+    }
+
+    // ── Tool call start (status: 'in_progress') ───────────────────────────────
+    // Gemini fires this when a tool begins executing.
+    // Fields: toolCallId, title (human-readable op name), kind ('execute'|'edit'|…)
     if (kind === 'tool_call') {
-        const toolName = (update.kind as string | undefined) || 'tool';
-        const toolId = (update.toolCallId as string | undefined) || randomUUID();
-        const input = (update.content as Record<string, unknown> | undefined) || {};
+        const toolCallId = (update.toolCallId as string | undefined) ?? randomUUID();
+        // 'title' is the human-readable name (e.g. "ls -F", "Writing to foo.txt")
+        // Fall back to 'kind' (e.g. "execute", "edit") if title is absent
+        const name = (update.title as string | undefined)
+            ?? (update.kind as string | undefined)
+            ?? 'tool';
+        // Input params are not available in the update itself (they live in the
+        // permission request that preceded this event), so we pass an empty object.
         return {
             type: 'assistant',
             message: {
                 role: 'assistant',
-                content: [{ type: 'tool_use', id: toolId, name: toolName, input }],
+                content: [{ type: 'tool_use', id: toolCallId, name, input: {} }],
             },
+        };
+    }
+
+    // ── Tool call result (status: 'completed' | 'failed') ────────────────────
+    // Gemini fires tool_call_update when a tool finishes (or errors).
+    // We map it to Claude's tool_result format.
+    if (kind === 'tool_call_update') {
+        const toolCallId = (update.toolCallId as string | undefined) ?? '';
+        const status = update.status as string | undefined;
+        // content is an array of {type:'content', content:{type:'text', text}} objects
+        const contentArr = update.content as Array<{ type: string; content?: { text?: string } }> | undefined;
+        const resultText = contentArr
+            ?.filter(c => c.type === 'content')
+            .map(c => c.content?.text ?? '')
+            .join('') ?? '';
+        return {
+            type: 'tool_result',
+            tool_use_id: toolCallId,
+            content: resultText,
+            is_error: status === 'failed',
         };
     }
 
@@ -250,6 +298,13 @@ export class GeminiAcpSession {
         if (msg.method === 'session/update') {
             const update = (msg.params as { update?: Record<string, unknown> } | undefined)?.update;
             if (!update) return;
+
+            // Flush accumulated text before broadcasting a tool event so that
+            // any preceding assistant text arrives before the tool card.
+            const updateKind = update.sessionUpdate as string | undefined;
+            if (updateKind === 'tool_call' || updateKind === 'tool_call_update') {
+                this.flushAccum();
+            }
 
             const event = updateToEvent(update);
             if (!event) return;
