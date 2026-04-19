@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import chalk from 'chalk';
 import { configuration } from '@/configuration';
 import { displayQRCode } from '@/ui/qrcode';
@@ -21,6 +22,18 @@ interface ServeOptions {
     agentArgs: string[];
 }
 
+/** Return the first non-loopback IPv4 address, or null if none found. */
+function getLanIp(): string | null {
+    for (const ifaces of Object.values(networkInterfaces())) {
+        for (const iface of ifaces ?? []) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    return null;
+}
+
 function parseArgs(args: string[]): ServeOptions {
     let agent: AgentType = 'claude';
     const agentArgs: string[] = [];
@@ -37,9 +50,8 @@ function parseArgs(args: string[]): ServeOptions {
     }
 
     const port = parseInt(process.env.HAPPY_SERVE_PORT ?? '4000', 10);
-    const endpoint =
-        process.env.HAPPY_SERVE_ENDPOINT ??
-        `ws://localhost:${port}`;
+    const defaultEndpoint = `ws://${getLanIp() ?? 'localhost'}:${port}`;
+    const endpoint = process.env.HAPPY_SERVE_ENDPOINT ?? defaultEndpoint;
 
     return { agent, port, endpoint, agentArgs };
 }
