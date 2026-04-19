@@ -69,37 +69,44 @@ export default memo(function Restore() {
         let payload: DirectQRPayload;
         try {
             payload = JSON.parse(trimmed) as DirectQRPayload;
-        } catch {
+        } catch (e) {
+            console.error('[DirectConnect] JSON parse failed:', e instanceof Error ? e.message : e, '\nInput (first 200 chars):', trimmed.slice(0, 200));
             Modal.alert('Error', 'Invalid JSON — paste the full payload from the CLI terminal.');
             return;
         }
 
         if (payload.type !== 'direct') {
+            console.error('[DirectConnect] Unexpected payload type:', payload.type, '(expected "direct")');
             Modal.alert('Error', 'This payload is not a direct-connect payload (type must be "direct").');
             return;
         }
 
         if (Date.now() > payload.nonceExpiry) {
+            console.error('[DirectConnect] Payload expired at', new Date(payload.nonceExpiry).toISOString(), '— now is', new Date().toISOString());
             Modal.alert('Error', 'This payload has expired. Run `happy serve` again to generate a fresh one.');
             return;
         }
 
         const webappPublicKey = getOrCreateWebappPublicKey();
+        console.log('[DirectConnect] Connecting to endpoint:', (payload as any).endpoint ?? '(no endpoint field)', '| publicKey:', webappPublicKey.slice(0, 8) + '…');
 
         await new Promise<void>((resolve, reject) => {
             const cleanup = directSocket.onStatusChange((status) => {
+                console.log('[DirectConnect] Socket status →', status);
                 if (status === 'connected') {
                     cleanup();
                     resolve();
                 } else if (status === 'error') {
                     cleanup();
                     const reason = directSocket.getLastErrorReason();
+                    console.error('[DirectConnect] Connection error:', reason ?? '(no reason)');
                     reject(new Error(reason ?? 'Connection failed — check that the CLI server is reachable.'));
                 }
             });
             directSocket.connectFirstTime(payload, webappPublicKey);
         });
 
+        console.log('[DirectConnect] Connected — navigating to /direct');
         router.push('/direct');
     });
 

@@ -1,6 +1,6 @@
 import { RoundButton } from "@/components/RoundButton";
 import { useAuth } from "@/auth/AuthContext";
-import { Text, View, Image, Platform } from "react-native";
+import { Text, View, Image, Platform, Pressable } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as React from 'react';
 import { useRouter } from "expo-router";
@@ -31,19 +31,34 @@ function NotAuthenticated() {
     const router = useRouter();
     const isLandscape = useIsLandscape();
     const insets = useSafeAreaInsets();
+    const devTapCount = React.useRef(0);
+    const devTapTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const goToRestore = () => {
         trackAccountRestored();
         router.push('/restore');
     };
 
+    const handleDevTap = () => {
+        devTapCount.current += 1;
+        if (devTapTimer.current) clearTimeout(devTapTimer.current);
+        if (devTapCount.current >= 7) {
+            devTapCount.current = 0;
+            router.push('/dev');
+            return;
+        }
+        devTapTimer.current = setTimeout(() => { devTapCount.current = 0; }, 1500);
+    };
+
     const portraitLayout = (
         <View style={styles.portraitContainer}>
-            <Image
-                source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
-                resizeMode="contain"
-                style={styles.logo}
-            />
+            <Pressable onPress={handleDevTap} hitSlop={8}>
+                <Image
+                    source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
+                    resizeMode="contain"
+                    style={styles.logo}
+                />
+            </Pressable>
             <Text style={styles.title}>
                 {t('welcome.title')}
             </Text>
@@ -56,6 +71,9 @@ function NotAuthenticated() {
                     onPress={goToRestore}
                 />
             </View>
+            <Pressable onPress={() => router.push('/dev')} style={styles.devLink} hitSlop={12}>
+                <Text style={styles.devLinkText}>Developer Tools</Text>
+            </Pressable>
         </View>
     );
 
@@ -63,11 +81,13 @@ function NotAuthenticated() {
         <View style={[styles.landscapeContainer, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.landscapeInner}>
                 <View style={styles.landscapeLogoSection}>
-                    <Image
-                        source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
-                        resizeMode="contain"
-                        style={styles.logo}
-                    />
+                    <Pressable onPress={handleDevTap} hitSlop={8}>
+                        <Image
+                            source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
+                            resizeMode="contain"
+                            style={styles.logo}
+                        />
+                    </Pressable>
                 </View>
                 <View style={styles.landscapeContentSection}>
                     <Text style={styles.landscapeTitle}>
@@ -82,6 +102,9 @@ function NotAuthenticated() {
                             onPress={goToRestore}
                         />
                     </View>
+                    <Pressable onPress={() => router.push('/dev')} style={styles.devLink} hitSlop={12}>
+                        <Text style={styles.devLinkText}>Developer Tools</Text>
+                    </Pressable>
                 </View>
             </View>
         </View>
@@ -128,6 +151,14 @@ const styles = StyleSheet.create((theme) => ({
         marginBottom: 16,
     },
     buttonContainerSecondary: {
+    },
+    devLink: {
+        marginTop: 24,
+    },
+    devLinkText: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        ...Typography.default(),
     },
     // Landscape styles
     landscapeContainer: {
