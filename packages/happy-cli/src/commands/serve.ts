@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
-import { configuration } from '@/configuration';
 import { displayQRCode } from '@/ui/qrcode';
 import { logger } from '@/ui/logger';
 import { generateCliKeys, buildQRPayload } from '@/server/directAuth';
@@ -171,11 +170,13 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     });
 
     // Display QR code
+    const qrJson = JSON.stringify(qrPayload);
     console.log(chalk.bold('\n🚀 Happy Direct Connect'));
     console.log(chalk.dim(`Agent: ${opts.agent}  |  Port: ${opts.port}`));
     console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
-    displayQRCode(JSON.stringify(qrPayload));
+    displayQRCode(qrJson);
     console.log(chalk.yellow('\nScan the QR code with the Happy webapp to connect.'));
+    console.log(chalk.dim('\nPayload: ') + qrJson);
     console.log(chalk.dim('Waiting for connection…\n'));
 
     // Keep process alive until SIGINT/SIGTERM
