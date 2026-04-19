@@ -2,6 +2,10 @@ name: Pack CLI
 
 on:
     workflow_dispatch:
+    push:
+        branches: [main]
+        paths:
+            - 'packages/happy-cli/**'
 
 jobs:
     pack:
