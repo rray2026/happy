@@ -223,6 +223,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
                     resolver(p.approved);
                 }
                 server.sendRpcResponse(id, { ok: true });
+            } else if (method === 'replay') {
+                const fromSeq = parseInt(
+                    (params as Record<string, unknown>)?.fromSeq as string ?? '-1', 10
+                );
+                server.replayFrom(isNaN(fromSeq) ? -1 : fromSeq);
+                server.sendRpcResponse(id, { ok: true });
             } else if (method === 'getLogs') {
                 const lines = parseInt(
                     (params as Record<string, unknown>)?.lines as string ?? '200', 10

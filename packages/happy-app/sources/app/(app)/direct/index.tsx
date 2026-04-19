@@ -209,12 +209,17 @@ export default memo(function DirectSessionScreen() {
             }
         });
 
-        // If not connected, try to reconnect from stored credentials
-        if (directSocket.getStatus() === 'disconnected') {
+        const currentStatus = directSocket.getStatus();
+        if (currentStatus === 'disconnected') {
             const creds = TokenStorage.getDirectCredentials();
             if (creds) {
-                directSocket.connectFromStored(creds);
+                // lastSeq: -1 → CLI sends full stored history on reconnect
+                directSocket.connectFromStored({ ...creds, lastSeq: -1 });
             }
+        } else if (currentStatus === 'connected') {
+            // Already connected (e.g. navigated back to /direct) — request history replay
+            const id = Math.random().toString(36).slice(2);
+            directSocket.rpc(id, 'replay', { fromSeq: -1 }).catch(() => {});
         }
 
         return () => {

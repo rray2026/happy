@@ -180,6 +180,14 @@ export function startWsServer(opts: {
             }
         },
 
+        replayFrom(fromSeq: number): void {
+            if (activeClient && activeClient.readyState === WebSocket.OPEN) {
+                for (const entry of store.getDelta(fromSeq)) {
+                    send(activeClient, { type: 'message', seq: entry.seq, payload: entry.payload });
+                }
+            }
+        },
+
         close(): void {
             clearPingTimer();
             wss.close();

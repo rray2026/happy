@@ -122,6 +122,8 @@ export interface WsServerHandle {
     broadcast(payload: unknown): number;
     /** Send an RPC response to the connected client */
     sendRpcResponse(id: string, result: unknown | null, error?: string): void;
+    /** Re-send all stored entries with seq > fromSeq to the connected client */
+    replayFrom(fromSeq: number): void;
     /** Close the server */
     close(): void;
 }
