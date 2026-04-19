@@ -88,7 +88,13 @@ export default memo(function Restore() {
         }
 
         const webappPublicKey = getOrCreateWebappPublicKey();
-        console.log('[DirectConnect] Connecting to endpoint:', (payload as any).endpoint ?? '(no endpoint field)', '| publicKey:', webappPublicKey.slice(0, 8) + '…');
+        console.log('[DirectConnect] Connecting to endpoint:', payload.endpoint, '| publicKey:', webappPublicKey.slice(0, 8) + '…');
+
+        // connectFirstTime must be called BEFORE onStatusChange so that the
+        // status is already 'connecting' when the handler fires immediately.
+        // (onStatusChange calls handler(currentStatus) synchronously on register,
+        //  and a leftover 'error' status from a prior attempt would reject instantly.)
+        directSocket.connectFirstTime(payload, webappPublicKey);
 
         await new Promise<void>((resolve, reject) => {
             const cleanup = directSocket.onStatusChange((status) => {
@@ -103,7 +109,6 @@ export default memo(function Restore() {
                     reject(new Error(reason ?? 'Connection failed — check that the CLI server is reachable.'));
                 }
             });
-            directSocket.connectFirstTime(payload, webappPublicKey);
         });
 
         console.log('[DirectConnect] Connected — navigating to /direct');

@@ -22,6 +22,8 @@ interface RpcResponse {
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const RPC_TIMEOUT_MS = 30_000;
 
+const TAG = '[DirectSocket]';
+
 class DirectSocket {
     private ws: WebSocket | null = null;
     private messageHandlers = new Set<DirectMessageHandler>();
@@ -41,7 +43,11 @@ class DirectSocket {
 
     /** First-time connect using the payload scanned from the CLI QR code. */
     connectFirstTime(qrPayload: DirectQRPayload, webappPublicKey: string): void {
+        console.log(TAG, 'connectFirstTime → endpoint:', qrPayload.endpoint,
+            '| sessionId:', qrPayload.sessionId,
+            '| nonceExpiry:', new Date(qrPayload.nonceExpiry).toISOString());
         this.closed = false;
+        this.lastErrorReason = null;
         this.qrPayload = qrPayload;
         this.storedCredentials = null;
         this.endpoint = qrPayload.endpoint;
@@ -53,7 +59,10 @@ class DirectSocket {
 
     /** Reconnect using credentials stored after a previous first-time connect. */
     connectFromStored(credentials: DirectCredentials): void {
+        console.log(TAG, 'connectFromStored → endpoint:', credentials.endpoint,
+            '| lastSeq:', credentials.lastSeq);
         this.closed = false;
+        this.lastErrorReason = null;
         this.storedCredentials = credentials;
         this.qrPayload = null;
         this.endpoint = credentials.endpoint;
@@ -64,6 +73,7 @@ class DirectSocket {
     }
 
     disconnect(): void {
+        console.log(TAG, 'disconnect() called');
         this.closed = true;
         this.clearReconnectTimer();
         if (this.ws) {
@@ -81,6 +91,7 @@ class DirectSocket {
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.rpcPending.delete(id);
+                console.error(TAG, 'RPC timeout:', method, '| id:', id);
                 reject(new Error(`RPC timeout: ${method}`));
             }, RPC_TIMEOUT_MS);
             this.rpcPending.set(id, (res) => {
@@ -113,7 +124,11 @@ class DirectSocket {
     // ── Private ──────────────────────────────────────────────────────────
 
     private open(): void {
-        if (this.ws) return;
+        if (this.ws) {
+            console.log(TAG, 'open() skipped — ws already exists, readyState:', this.ws.readyState);
+            return;
+        }
+        console.log(TAG, 'opening WebSocket →', this.endpoint);
         this.setStatus('connecting');
 
         try {
@@ -121,14 +136,17 @@ class DirectSocket {
             this.ws = ws;
 
             ws.onopen = () => {
+                console.log(TAG, 'ws.onopen — connection established');
                 this.resetReconnectDelay();
                 if (this.qrPayload) {
+                    console.log(TAG, 'sending hello (first-time) nonce:', this.qrPayload.nonce.slice(0, 8) + '…');
                     this.rawSend({
                         type: 'hello',
                         nonce: this.qrPayload.nonce,
                         webappPublicKey: this.webappPublicKey,
                     });
                 } else if (this.storedCredentials) {
+                    console.log(TAG, 'sending hello (resume) lastSeq:', this.lastSeq);
                     this.rawSend({
                         type: 'hello',
                         sessionCredential: this.storedCredentials.sessionCredential,
@@ -140,13 +158,17 @@ class DirectSocket {
 
             ws.onmessage = (event) => {
                 try {
-                    this.handleMessage(JSON.parse(event.data as string));
-                } catch {
-                    // ignore malformed frames
+                    const msg = JSON.parse(event.data as string);
+                    console.log(TAG, 'ws.onmessage type:', (msg as any)?.type);
+                    this.handleMessage(msg);
+                } catch (e) {
+                    console.error(TAG, 'ws.onmessage parse error:', e);
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                console.log(TAG, 'ws.onclose — code:', event.code, '| reason:', event.reason || '(none)',
+                    '| wasClean:', event.wasClean);
                 this.ws = null;
                 if (!this.closed) {
                     this.setStatus('disconnected');
@@ -154,12 +176,15 @@ class DirectSocket {
                 }
             };
 
-            ws.onerror = () => {
+            ws.onerror = (event) => {
+                console.error(TAG, 'ws.onerror fired — endpoint was:', this.endpoint,
+                    '| event:', JSON.stringify(event));
                 // onclose fires after onerror, so we just update status here
                 this.lastErrorReason = 'WebSocket connection failed — check that the CLI server is reachable';
                 this.setStatus('error');
             };
-        } catch {
+        } catch (e) {
+            console.error(TAG, 'WebSocket constructor threw:', e);
             this.ws = null;
             this.lastErrorReason = 'Could not open WebSocket connection';
             this.setStatus('error');
@@ -175,6 +200,8 @@ class DirectSocket {
 
         switch (m.type) {
             case 'welcome': {
+                console.log(TAG, 'received welcome — sessionCredential present:',
+                    typeof m.sessionCredential === 'string', '| currentSeq:', m.currentSeq);
                 if (this.qrPayload && typeof m.sessionCredential === 'string') {
                     const creds: DirectCredentials = {
                         endpoint: this.endpoint,
@@ -224,23 +251,31 @@ class DirectSocket {
             }
 
             case 'error':
-                // Server rejected our handshake — stop reconnecting
                 this.lastErrorReason = typeof m.message === 'string' ? m.message : 'Server rejected the connection';
+                console.error(TAG, 'server sent error frame:', this.lastErrorReason);
+                // Server rejected our handshake — stop reconnecting
                 this.closed = true;
                 this.ws?.close();
                 this.setStatus('error');
                 break;
+
+            default:
+                console.log(TAG, 'unhandled message type:', m.type);
         }
     }
 
     private rawSend(msg: unknown): void {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(msg));
+        } else {
+            console.warn(TAG, 'rawSend skipped — ws not open, readyState:',
+                this.ws ? this.ws.readyState : 'null');
         }
     }
 
     private scheduleReconnect(): void {
         this.clearReconnectTimer();
+        console.log(TAG, 'scheduling reconnect in', this.reconnectDelay, 'ms');
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             if (!this.closed) {
@@ -263,6 +298,7 @@ class DirectSocket {
 
     private setStatus(status: DirectSocketStatus): void {
         if (this.currentStatus !== status) {
+            console.log(TAG, 'status:', this.currentStatus, '→', status);
             this.currentStatus = status;
             this.statusHandlers.forEach((h) => h(status));
         }
