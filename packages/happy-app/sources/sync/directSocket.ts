@@ -31,6 +31,7 @@ class DirectSocket {
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private reconnectDelay = 1_000;
     private closed = false;
+    private lastErrorReason: string | null = null;
 
     private endpoint = '';
     private qrPayload: DirectQRPayload | null = null;
@@ -105,6 +106,10 @@ class DirectSocket {
         return this.currentStatus;
     }
 
+    getLastErrorReason(): string | null {
+        return this.lastErrorReason;
+    }
+
     // ── Private ──────────────────────────────────────────────────────────
 
     private open(): void {
@@ -151,10 +156,12 @@ class DirectSocket {
 
             ws.onerror = () => {
                 // onclose fires after onerror, so we just update status here
+                this.lastErrorReason = 'WebSocket connection failed — check that the CLI server is reachable';
                 this.setStatus('error');
             };
         } catch {
             this.ws = null;
+            this.lastErrorReason = 'Could not open WebSocket connection';
             this.setStatus('error');
             if (!this.closed) {
                 this.scheduleReconnect();
@@ -218,6 +225,7 @@ class DirectSocket {
 
             case 'error':
                 // Server rejected our handshake — stop reconnecting
+                this.lastErrorReason = typeof m.message === 'string' ? m.message : 'Server rejected the connection';
                 this.closed = true;
                 this.ws?.close();
                 this.setStatus('error');

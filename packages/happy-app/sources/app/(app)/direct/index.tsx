@@ -7,6 +7,8 @@ import {
     KeyboardAvoidingView,
     Platform,
     TouchableOpacity,
+    Modal,
+    ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native-unistyles';
@@ -162,6 +164,11 @@ export default memo(function DirectSessionScreen() {
     const [items, setItems] = useState<DisplayItem[]>([]);
     const [inputText, setInputText] = useState('');
     const scrollRef = useRef<ScrollView>(null);
+    const [logsVisible, setLogsVisible] = useState(false);
+    const [logLines, setLogLines] = useState<string[]>([]);
+    const [logPath, setLogPath] = useState('');
+    const [logsLoading, setLogsLoading] = useState(false);
+    const logsScrollRef = useRef<ScrollView>(null);
 
     // Subscribe to socket status and messages
     useEffect(() => {
@@ -207,21 +214,84 @@ export default memo(function DirectSessionScreen() {
         router.back();
     }, [router]);
 
+    const handleOpenLogs = useCallback(async () => {
+        setLogsVisible(true);
+        setLogsLoading(true);
+        try {
+            const id = Math.random().toString(36).slice(2);
+            const res = await directSocket.rpc(id, 'getLogs', { lines: 300 });
+            if (res.result && typeof res.result === 'object') {
+                const r = res.result as { lines: string[]; logPath: string };
+                setLogLines(r.lines ?? []);
+                setLogPath(r.logPath ?? '');
+            } else if (res.error) {
+                setLogLines([`Error fetching logs: ${res.error}`]);
+            }
+        } catch (e) {
+            setLogLines([`Failed to fetch logs: ${e instanceof Error ? e.message : String(e)}`]);
+        } finally {
+            setLogsLoading(false);
+            setTimeout(() => logsScrollRef.current?.scrollToEnd({ animated: false }), 100);
+        }
+    }, []);
+
     return (
         <KeyboardAvoidingView
             style={styles.flex}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
+            {/* Logs modal */}
+            <Modal visible={logsVisible} animationType="slide" onRequestClose={() => setLogsVisible(false)}>
+                <View style={styles.logsModal}>
+                    <View style={styles.logsHeader}>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.logsTitle}>CLI Serve Logs</Text>
+                            {logPath ? <Text style={styles.logsPath}>{logPath}</Text> : null}
+                        </View>
+                        <TouchableOpacity onPress={() => setLogsVisible(false)} style={styles.logsClose}>
+                            <Ionicons name="close" size={22} color="#8E8E93" />
+                        </TouchableOpacity>
+                    </View>
+                    {logsLoading ? (
+                        <View style={styles.logsCenter}>
+                            <ActivityIndicator size="large" />
+                        </View>
+                    ) : (
+                        <ScrollView
+                            ref={logsScrollRef}
+                            style={styles.logsScroll}
+                            contentContainerStyle={styles.logsContent}
+                        >
+                            {logLines.length === 0 ? (
+                                <Text style={styles.logsEmpty}>No log entries found.</Text>
+                            ) : (
+                                logLines.map((line, i) => (
+                                    <Text key={i} style={styles.logsLine}>{line}</Text>
+                                ))
+                            )}
+                        </ScrollView>
+                    )}
+                </View>
+            </Modal>
+
             {/* Header */}
             <View style={styles.header}>
                 <View style={styles.statusRow}>
                     <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />
                     <Text style={styles.statusText}>{statusLabel(status)}</Text>
                 </View>
-                <TouchableOpacity onPress={handleDisconnect} style={styles.disconnectBtn}>
-                    <Ionicons name="close-circle-outline" size={22} color="#FF3B30" />
-                    <Text style={styles.disconnectText}>Disconnect</Text>
-                </TouchableOpacity>
+                <View style={styles.headerActions}>
+                    {status === 'connected' && (
+                        <TouchableOpacity onPress={handleOpenLogs} style={styles.logsBtn}>
+                            <Ionicons name="document-text-outline" size={18} color="#8E8E93" />
+                            <Text style={styles.logsBtnText}>Logs</Text>
+                        </TouchableOpacity>
+                    )}
+                    <TouchableOpacity onPress={handleDisconnect} style={styles.disconnectBtn}>
+                        <Ionicons name="close-circle-outline" size={22} color="#FF3B30" />
+                        <Text style={styles.disconnectText}>Disconnect</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Message list */}
@@ -343,6 +413,20 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text,
         fontWeight: '500',
     },
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    logsBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    logsBtnText: {
+        fontSize: 14,
+        color: '#8E8E93',
+    },
     disconnectBtn: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -351,6 +435,57 @@ const styles = StyleSheet.create((theme) => ({
     disconnectText: {
         fontSize: 14,
         color: '#FF3B30',
+    },
+    logsModal: {
+        flex: 1,
+        backgroundColor: '#0D0D0D',
+    },
+    logsHeader: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        paddingHorizontal: 16,
+        paddingTop: 56,
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#2C2C2E',
+    },
+    logsTitle: {
+        fontSize: 17,
+        fontWeight: '600',
+        color: '#FFFFFF',
+    },
+    logsPath: {
+        fontSize: 11,
+        color: '#636366',
+        fontFamily: 'IBMPlexMono-Regular',
+        marginTop: 2,
+    },
+    logsClose: {
+        padding: 4,
+    },
+    logsCenter: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    logsScroll: {
+        flex: 1,
+    },
+    logsContent: {
+        padding: 12,
+        gap: 2,
+    },
+    logsEmpty: {
+        color: '#636366',
+        fontSize: 13,
+        textAlign: 'center',
+        marginTop: 40,
+    },
+    logsLine: {
+        fontSize: 11,
+        color: '#E5E5EA',
+        fontFamily: 'IBMPlexMono-Regular',
+        lineHeight: 16,
     },
     messageList: {
         flex: 1,
