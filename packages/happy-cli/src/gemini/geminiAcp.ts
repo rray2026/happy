@@ -22,9 +22,7 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
 
-/** ms of silence after last chunk before we consider the response complete */
-const IDLE_TIMEOUT_MS = 800;
-/** ms to wait for initialize / newSession handshake */
+/** ms to wait for initialize / session/new handshake */
 const INIT_TIMEOUT_MS = 20_000;
 /** ms total timeout per prompt turn */
 const PROMPT_TIMEOUT_MS = 120_000;
@@ -56,9 +54,11 @@ function updateToEvent(update: Record<string, unknown>): unknown | null {
     const kind = update.sessionUpdate as string | undefined;
 
     if (kind === 'agent_message_chunk') {
-        const textDelta = (update.messageChunk as { textDelta?: string } | undefined)?.textDelta;
-        if (!textDelta) return null;
-        return { _acpChunk: true, text: textDelta };
+        // v0.38+: text lives in content.text
+        const text = (update.content as { text?: string } | undefined)?.text
+            ?? (update.messageChunk as { textDelta?: string } | undefined)?.textDelta;
+        if (!text) return null;
+        return { _acpChunk: true, text };
     }
 
     if (kind === 'tool_call') {
@@ -88,8 +88,6 @@ export class GeminiAcpSession {
     private msgId = 1;
     private pending = new Map<string, (msg: JsonRpcMsg) => void>();
     private textAccum = '';
-    private idleTimer: ReturnType<typeof setTimeout> | null = null;
-    private idleResolve: (() => void) | null = null;
     private readonly broadcast: BroadcastFn;
     private readonly apiKey: string | undefined;
     private readonly onPermissionRequest: PermissionRequestFn | undefined;
@@ -114,8 +112,6 @@ export class GeminiAcpSession {
     }
 
     dispose(): void {
-        if (this.idleTimer) clearTimeout(this.idleTimer);
-        this.idleTimer = null;
         if (this.proc) {
             this.proc.kill();
             this.proc = null;
@@ -174,7 +170,7 @@ export class GeminiAcpSession {
 
         // initialize
         await this.rpc('initialize', {
-            protocolVersion: '1.0',
+            protocolVersion: 1,
             capabilities: {
                 roots: { listChanged: false },
                 sampling: {},
@@ -185,8 +181,8 @@ export class GeminiAcpSession {
         });
         logger.debug('[GeminiAcp] initialized');
 
-        // newSession
-        const sessionRes = await this.rpc('newSession', {
+        // session/new
+        const sessionRes = await this.rpc('session/new', {
             cwd: process.cwd(),
             mcpServers: [],
         });
@@ -203,24 +199,13 @@ export class GeminiAcpSession {
     private async doPrompt(text: string): Promise<void> {
         this.textAccum = '';
 
-        const idlePromise = new Promise<void>((resolve) => {
-            this.idleResolve = resolve;
-        });
-
-        const timeoutPromise = new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error('Gemini response timed out')), PROMPT_TIMEOUT_MS)
-        );
-
-        // Send prompt (JSON-RPC; response is just an ack — we await idle for real output)
-        await this.rpc('prompt', {
+        // session/prompt returns a result when the turn is complete (all updates already sent)
+        await this.rpc('session/prompt', {
             sessionId: this.acpSessionId,
             prompt: [{ type: 'text', text }],
         });
 
-        logger.debug('[GeminiAcp] prompt sent, waiting for idle…');
-        await Promise.race([idlePromise, timeoutPromise]);
-
-        // Flush any remaining accumulated text (safety net if idle fired before emit)
+        logger.debug('[GeminiAcp] prompt complete');
         this.flushAccum();
     }
 
@@ -237,26 +222,32 @@ export class GeminiAcpSession {
         }
 
         // Server→client permission request — forward to webapp if handler provided, else auto-approve
-        if (msg.id !== undefined && msg.method === 'requestPermission') {
+        if (msg.id !== undefined && msg.method === 'session/request_permission') {
             const params = msg.params as Record<string, unknown> | undefined;
-            const toolName = (params?.toolName as string | undefined) ?? 'unknown';
-            const input = params?.input ?? params ?? {};
+            const toolCall = params?.toolCall as Record<string, unknown> | undefined;
+            const toolName = (toolCall?.title as string | undefined)
+                ?? (toolCall?.kind as string | undefined)
+                ?? 'unknown';
+            const input = toolCall ?? {};
+            const options = (params?.options as Array<{ optionId: string; kind: string }> | undefined) ?? [];
+            const approveOptionId = options.find(o => o.kind.startsWith('allow'))?.optionId ?? 'proceed_always';
+            const denyOptionId = options.find(o => o.kind.startsWith('reject') || o.optionId === 'cancel')?.optionId ?? 'cancel';
             const permissionId = randomUUID();
             const msgId = msg.id;
             if (this.onPermissionRequest) {
-                logger.debug('[GeminiAcp] requestPermission — forwarding to webapp, permissionId:', permissionId);
+                logger.debug('[GeminiAcp] session/request_permission — forwarding to webapp, permissionId:', permissionId);
                 this.onPermissionRequest(permissionId, toolName, input)
-                    .then((approved) => this.write({ jsonrpc: '2.0', id: msgId, result: { approved } }))
-                    .catch(() => this.write({ jsonrpc: '2.0', id: msgId, result: { approved: false } }));
+                    .then((approved) => this.write({ jsonrpc: '2.0', id: msgId, result: { optionId: approved ? approveOptionId : denyOptionId } }))
+                    .catch(() => this.write({ jsonrpc: '2.0', id: msgId, result: { optionId: denyOptionId } }));
             } else {
-                logger.debug('[GeminiAcp] requestPermission — auto-approving (no handler)');
-                this.write({ jsonrpc: '2.0', id: msgId, result: { approved: true } });
+                logger.debug('[GeminiAcp] session/request_permission — auto-approving (no handler)');
+                this.write({ jsonrpc: '2.0', id: msgId, result: { optionId: approveOptionId } });
             }
             return;
         }
 
-        // Notification: sessionUpdate
-        if (msg.method === 'sessionUpdate') {
+        // Notification: session/update
+        if (msg.method === 'session/update') {
             const update = (msg.params as { update?: Record<string, unknown> } | undefined)?.update;
             if (!update) return;
 
@@ -266,23 +257,10 @@ export class GeminiAcpSession {
             const chunk = event as { _acpChunk?: boolean; text?: string };
             if (chunk._acpChunk) {
                 this.textAccum += chunk.text ?? '';
-                this.scheduleIdle();
             } else {
                 this.broadcast(event);
             }
         }
-    }
-
-    // ── Private: idle timer ───────────────────────────────────────────────────
-
-    private scheduleIdle(): void {
-        if (this.idleTimer) clearTimeout(this.idleTimer);
-        this.idleTimer = setTimeout(() => {
-            this.idleTimer = null;
-            this.flushAccum();
-            this.idleResolve?.();
-            this.idleResolve = null;
-        }, IDLE_TIMEOUT_MS);
     }
 
     private flushAccum(): void {
@@ -299,11 +277,12 @@ export class GeminiAcpSession {
 
     private rpc(method: string, params?: unknown): Promise<JsonRpcMsg> {
         const id = String(this.msgId++);
+        const timeoutMs = method === 'session/prompt' ? PROMPT_TIMEOUT_MS : INIT_TIMEOUT_MS;
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.pending.delete(id);
                 reject(new Error(`ACP RPC timeout: ${method}`));
-            }, INIT_TIMEOUT_MS);
+            }, timeoutMs);
 
             this.pending.set(id, (res) => {
                 clearTimeout(timer);
