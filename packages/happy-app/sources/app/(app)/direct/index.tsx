@@ -129,7 +129,10 @@ function eventToItems(event: ClaudeEvent): DisplayItem[] {
         }
         case 'result': {
             const re = event as ClaudeResultEvent;
-            return [{ kind: 'result', text: re.result || re.subtype, success: re.subtype === 'success', id: nextId() }];
+            if (re.subtype === 'error') {
+                return [{ kind: 'result', text: re.result || 'error', success: false, id: nextId() }];
+            }
+            return [];
         }
         case 'system': {
             const se = event as ClaudeSystemEvent;

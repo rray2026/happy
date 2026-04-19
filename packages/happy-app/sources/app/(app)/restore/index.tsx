@@ -35,6 +35,7 @@ export default memo(function Restore() {
 
     const [restoreKey, setRestoreKey] = useState('');
     const [directJson, setDirectJson] = useState('');
+    const storedDirectCreds = Platform.OS === 'web' ? TokenStorage.getDirectCredentials() : null;
 
     const [restoreLoading, handleRestore] = useHappyAction(async () => {
         const trimmed = restoreKey.trim();
@@ -163,6 +164,19 @@ export default memo(function Restore() {
                     <>
                         <View style={styles.divider} />
                         <View style={{ width: '100%', maxWidth: layout.maxWidth, paddingBottom: 40 }}>
+                            {/* Resume existing session */}
+                            {storedDirectCreds && (
+                                <View style={styles.resumeBox}>
+                                    <Text style={styles.resumeTitle}>Active CLI Session</Text>
+                                    <Text style={styles.resumeEndpoint} numberOfLines={1}>
+                                        {storedDirectCreds.endpoint}
+                                    </Text>
+                                    <RoundButton
+                                        title="Resume Connection"
+                                        onPress={() => router.push('/direct')}
+                                    />
+                                </View>
+                            )}
                             <Text style={styles.sectionTitle}>Connect Directly to CLI</Text>
                             <Text style={styles.sectionSubtitle}>
                                 Run <Text style={{ fontFamily: 'IBMPlexMono-Regular' }}>happy serve --claude</Text> on your machine, then paste the JSON payload shown in the terminal below.
@@ -233,5 +247,24 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.divider,
         marginVertical: 32,
         width: '100%',
+    },
+    resumeBox: {
+        backgroundColor: theme.colors.input.background,
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 24,
+        gap: 8,
+    },
+    resumeTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: theme.colors.text,
+        ...Typography.default('semiBold'),
+    },
+    resumeEndpoint: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        fontFamily: 'IBMPlexMono-Regular',
+        marginBottom: 4,
     },
 }));
