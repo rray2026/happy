@@ -1,0 +1,41 @@
+{
+  "name": "happy-webapp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@slopus/happy-wire": "workspace:*",
+    "@tanstack/react-virtual": "^3.13.0",
+    "axios": "^1.10.0",
+    "clsx": "^2.1.1",
+    "fuse.js": "^7.1.0",
+    "libsodium-wrappers": "0.8.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-router": "^7.5.0",
+    "react-syntax-highlighter": "^15.6.1",
+    "socket.io-client": "^4.8.1",
+    "tailwind-merge": "^2.6.0",
+    "zod": "3.25.76",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/libsodium-wrappers": "^0.7.14",
+    "@types/react": "~19.1.10",
+    "@types/react-dom": "^19.1.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.1.0",
+    "typescript": "5.9.3",
+    "vite": "^6.3.4",
+    "vitest": "^3.2.4"
+  }
+}

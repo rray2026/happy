@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'IBMPlexSans';
+  src: url('/fonts/IBMPlexSans-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'IBMPlexSans';
+  src: url('/fonts/IBMPlexSans-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'IBMPlexMono';
+  src: url('/fonts/IBMPlexMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'IBMPlexMono';
+  src: url('/fonts/IBMPlexMono-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+}
+
+@theme {
+  --font-sans: 'IBMPlexSans', system-ui, sans-serif;
+  --font-mono: 'IBMPlexMono', ui-monospace, monospace;
+}
+
+:root {
+  font-family: 'IBMPlexSans', system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Light theme tokens - injected by ThemeProvider */
+  --color-text: #000000;
+  --color-text-secondary: #8E8E93;
+  --color-text-link: #2BACCC;
+  --color-text-destructive: #FF3B30;
+  --color-surface: #ffffff;
+  --color-surface-high: #F8F8F8;
+  --color-surface-highest: #f0f0f0;
+  --color-surface-pressed: #f0f0f2;
+  --color-divider: #eaeaea;
+  --color-success: #34C759;
+  --color-error: #FF3B30;
+  --color-warning: #FF9500;
+  --color-primary: #000000;
+  --color-primary-foreground: #ffffff;
+  --color-grouped-bg: #F2F2F7;
+  --color-grouped-section-title: #8E8E93;
+  --color-header-bg: #ffffff;
+  --color-switch-active: #34C759;
+  --color-switch-inactive: #dddddd;
+  --color-fab-bg: #000000;
+  --color-fab-fg: #ffffff;
+  --color-connected: #34C759;
+  --color-connecting: #007AFF;
+  --color-disconnected: #8E8E93;
+}
+
+.dark {
+  --color-text: #ffffff;
+  --color-text-secondary: #8E8E93;
+  --color-text-link: #2BACCC;
+  --color-text-destructive: #FF6B6B;
+  --color-surface: #000000;
+  --color-surface-high: #1C1C1E;
+  --color-surface-highest: #2C2C2E;
+  --color-surface-pressed: #3A3A3C;
+  --color-divider: #38383A;
+  --color-success: #30D158;
+  --color-error: #FF6B6B;
+  --color-warning: #FFD60A;
+  --color-primary: #ffffff;
+  --color-primary-foreground: #000000;
+  --color-grouped-bg: #1C1C1E;
+  --color-grouped-section-title: #8E8E93;
+  --color-header-bg: #1C1C1E;
+  --color-switch-active: #30D158;
+  --color-switch-inactive: #38383A;
+  --color-fab-bg: #ffffff;
+  --color-fab-fg: #000000;
+  --color-connected: #30D158;
+  --color-connecting: #0A84FF;
+  --color-disconnected: #636366;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-divider);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* Code blocks */
+pre, code {
+  font-family: 'IBMPlexMono', ui-monospace, monospace;
+}
