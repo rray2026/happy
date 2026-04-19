@@ -45,6 +45,7 @@ function parseArgs(args: string[]): ServeOptions {
 
 /**
  * Spawn the agent CLI in streaming JSON mode.
+ * Both claude and gemini support --print --output-format stream-json --verbose.
  * Each stdout line is expected to be a JSON event; non-JSON lines are ignored.
  * Returns a promise that resolves when the process exits.
  */
@@ -68,6 +69,14 @@ async function runAgentProcess(opts: {
     logger.debug(`[serve] Spawning ${agent} with args: ${JSON.stringify(cliArgs)}`);
 
     return new Promise<number>((resolve) => {
+        // Guard against close firing after error has already settled
+        let settled = false;
+        const settle = (code: number) => {
+            if (settled) return;
+            settled = true;
+            resolve(code);
+        };
+
         const child = spawn(agent, cliArgs, {
             stdio: ['ignore', 'pipe', 'inherit'],
             cwd: process.cwd(),
@@ -88,10 +97,21 @@ async function runAgentProcess(opts: {
             }
         });
 
-        child.on('close', (code) => resolve(code ?? 0));
         child.on('error', (err) => {
-            logger.debug(`[serve] Agent process error: ${err.message}`);
-            resolve(1);
+            const isNotFound = (err as NodeJS.ErrnoException).code === 'ENOENT';
+            const msg = isNotFound
+                ? `Command '${agent}' not found — is it installed and in PATH?`
+                : err.message;
+            logger.debug(`[serve] Agent process error: ${msg}`);
+            console.error(chalk.red(`\n[serve] ${msg}\n`));
+            // Surface the error to the webapp so the user sees it
+            onEvent({ type: 'result', subtype: 'error', result: msg });
+            settle(1);
+        });
+
+        child.on('close', (code) => {
+            logger.debug(`[serve] ${agent} exited with code ${code}`);
+            settle(code ?? 0);
         });
     });
 }
