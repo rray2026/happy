@@ -7,6 +7,7 @@ import { displayQRCode } from '@/ui/qrcode';
 import { logger } from '@/ui/logger';
 import { generateCliKeys, buildQRPayload } from '@/server/directAuth';
 import { startWsServer } from '@/server/wsServer';
+import { GeminiAcpSession } from '@/gemini/geminiAcp';
 
 /** Supported agent types for `happy serve` */
 type AgentType = 'claude' | 'gemini';
@@ -16,8 +17,10 @@ interface ServeOptions {
     port: number;
     /** Public WebSocket endpoint advertised in the QR code */
     endpoint: string;
-    /** Extra args forwarded to the agent CLI */
+    /** Extra args forwarded to the agent CLI (Claude only) */
     agentArgs: string[];
+    /** Gemini API key (GEMINI_API_KEY env, or GOOGLE_API_KEY env) */
+    geminiApiKey: string | undefined;
 }
 
 function parseArgs(args: string[]): ServeOptions {
@@ -39,17 +42,17 @@ function parseArgs(args: string[]): ServeOptions {
     const endpoint =
         process.env.HAPPY_SERVE_ENDPOINT ??
         `ws://localhost:${port}`;
+    const geminiApiKey =
+        process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
 
-    return { agent, port, endpoint, agentArgs };
+    return { agent, port, endpoint, agentArgs, geminiApiKey };
 }
 
 /**
- * Spawn the agent CLI in streaming JSON mode.
- * Each stdout line is expected to be a JSON event; non-JSON lines are ignored.
+ * Spawn the Claude CLI in streaming JSON mode and stream events back via onEvent.
  * Returns a promise that resolves when the process exits.
  */
-async function runAgentProcess(opts: {
-    agent: AgentType;
+async function runClaudeProcess(opts: {
     prompt: string;
     resumeSessionId: string | null;
     agentArgs: string[];
@@ -57,7 +60,7 @@ async function runAgentProcess(opts: {
     onSessionId: (id: string) => void;
     abort: AbortSignal;
 }): Promise<number> {
-    const { agent, prompt, resumeSessionId, agentArgs, onEvent, onSessionId, abort } = opts;
+    const { prompt, resumeSessionId, agentArgs, onEvent, onSessionId, abort } = opts;
 
     const cliArgs: string[] = ['--print', '--output-format', 'stream-json', '--verbose'];
     if (resumeSessionId) {
@@ -65,17 +68,23 @@ async function runAgentProcess(opts: {
     }
     cliArgs.push(...agentArgs, prompt);
 
-    logger.debug(`[serve] Spawning ${agent} with args: ${JSON.stringify(cliArgs)}`);
+    logger.debug(`[serve] Spawning claude with args: ${JSON.stringify(cliArgs)}`);
 
     return new Promise<number>((resolve) => {
-        const child = spawn(agent, cliArgs, {
+        let settled = false;
+        const settle = (code: number) => {
+            if (settled) return;
+            settled = true;
+            resolve(code);
+        };
+
+        const child = spawn('claude', cliArgs, {
             stdio: ['ignore', 'pipe', 'inherit'],
             cwd: process.cwd(),
             signal: abort,
         });
 
         const rl = createInterface({ input: child.stdout! });
-
         rl.on('line', (line) => {
             try {
                 const event = JSON.parse(line);
@@ -88,10 +97,20 @@ async function runAgentProcess(opts: {
             }
         });
 
-        child.on('close', (code) => resolve(code ?? 0));
         child.on('error', (err) => {
-            logger.debug(`[serve] Agent process error: ${err.message}`);
-            resolve(1);
+            const isNotFound = (err as NodeJS.ErrnoException).code === 'ENOENT';
+            const msg = isNotFound
+                ? "Command 'claude' not found — is Claude Code installed?"
+                : err.message;
+            logger.debug('[serve] Claude process error:', msg);
+            console.error(chalk.red(`\n[serve] ${msg}\n`));
+            onEvent({ type: 'result', subtype: 'error', result: msg });
+            settle(1);
+        });
+
+        child.on('close', (code) => {
+            logger.debug(`[serve] claude exited with code ${code}`);
+            settle(code ?? 0);
         });
     });
 }
@@ -101,7 +120,13 @@ async function runAgentProcess(opts: {
  *
  * Starts an embedded WebSocket server on localhost and displays a QR code.
  * The webapp scans the QR code to connect directly to this machine.
- * User inputs from the webapp are forwarded to the agent subprocess.
+ *
+ * Claude mode: spawns `claude --print --output-format stream-json --verbose`
+ *              per user turn, streams JSON events to the webapp.
+ *
+ * Gemini mode: spawns `gemini --experimental-acp` once, keeps it alive,
+ *              communicates via ACP (JSON-RPC 2.0 over stdin/stdout),
+ *              converts ACP session updates to Claude-compatible events.
  */
 export async function handleServeCommand(args: string[]): Promise<void> {
     const opts = parseArgs(args);
@@ -110,40 +135,64 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     const cliKeys = generateCliKeys();
     const qrPayload = buildQRPayload(opts.endpoint, cliKeys, sessionId);
 
-    // Track agent state
-    let agentSessionId: string | null = null;
-    let agentRunning = false;
+    // ── Claude state ────────────────────────────────────────────────────────
+    let claudeSessionId: string | null = null;
+    let claudeRunning = false;
     const abortController = new AbortController();
 
-    // Input handler: called when webapp sends text
+    // ── Gemini ACP session (created lazily, kept alive) ─────────────────────
+    const geminiSession = opts.agent === 'gemini'
+        ? new GeminiAcpSession({ broadcast: (e) => server.broadcast(e), apiKey: opts.geminiApiKey })
+        : null;
+
+    // ── Input handler ────────────────────────────────────────────────────────
     async function handleInput(text: string): Promise<void> {
-        if (agentRunning) {
-            logger.debug('[serve] Ignored input – agent already running');
+        if (opts.agent === 'gemini' && geminiSession) {
+            // Gemini: long-lived ACP session, single concurrent prompt
+            if (claudeRunning) {
+                logger.debug('[serve] Ignored input — Gemini is already responding');
+                return;
+            }
+            claudeRunning = true;
+            try {
+                await geminiSession.sendPrompt(text);
+                server.broadcast({ type: 'result', subtype: 'success', result: 'Done' });
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.debug('[serve] Gemini error:', msg);
+                server.broadcast({ type: 'result', subtype: 'error', result: msg });
+            } finally {
+                claudeRunning = false;
+            }
             return;
         }
-        agentRunning = true;
 
+        // Claude: subprocess per turn
+        if (claudeRunning) {
+            logger.debug('[serve] Ignored input — Claude is already running');
+            return;
+        }
+        claudeRunning = true;
         try {
-            await runAgentProcess({
-                agent: opts.agent,
+            await runClaudeProcess({
                 prompt: text,
-                resumeSessionId: agentSessionId,
+                resumeSessionId: claudeSessionId,
                 agentArgs: opts.agentArgs,
-                onEvent: (event) => { server.broadcast(event); },
+                onEvent: (e) => server.broadcast(e),
                 onSessionId: (id) => {
-                    if (!agentSessionId) {
-                        agentSessionId = id;
-                        logger.debug(`[serve] Agent session ID: ${id}`);
+                    if (!claudeSessionId) {
+                        claudeSessionId = id;
+                        logger.debug('[serve] Claude session ID:', id);
                     }
                 },
                 abort: abortController.signal,
             });
         } finally {
-            agentRunning = false;
+            claudeRunning = false;
         }
     }
 
-    // Start WebSocket server
+    // ── WebSocket server ─────────────────────────────────────────────────────
     const server = startWsServer({
         port: opts.port,
         sessionId,
@@ -152,13 +201,19 @@ export async function handleServeCommand(args: string[]): Promise<void> {
         onRpc: async (id, method, params) => {
             if (method === 'abort') {
                 abortController.abort();
+                geminiSession?.dispose();
                 server.sendRpcResponse(id, { ok: true });
             } else if (method === 'getLogs') {
-                const lines = parseInt((params as Record<string, unknown>)?.lines as string ?? '200', 10);
+                const lines = parseInt(
+                    (params as Record<string, unknown>)?.lines as string ?? '200', 10
+                );
                 try {
                     const content = readFileSync(logger.getLogPath(), 'utf8');
                     const allLines = content.split('\n').filter(Boolean);
-                    server.sendRpcResponse(id, { lines: allLines.slice(-lines), logPath: logger.getLogPath() });
+                    server.sendRpcResponse(id, {
+                        lines: allLines.slice(-lines),
+                        logPath: logger.getLogPath(),
+                    });
                 } catch {
                     server.sendRpcResponse(id, { lines: [], logPath: logger.getLogPath() });
                 }
@@ -166,10 +221,14 @@ export async function handleServeCommand(args: string[]): Promise<void> {
                 server.sendRpcResponse(id, null, `unknown method: ${method}`);
             }
         },
-        onInput: (text) => { handleInput(text).catch((err) => logger.debug(`[serve] Input error: ${err?.message}`)); },
+        onInput: (text) => {
+            handleInput(text).catch((err) =>
+                logger.debug('[serve] Input error:', err?.message)
+            );
+        },
     });
 
-    // Display QR code
+    // ── Display QR code ──────────────────────────────────────────────────────
     const qrJson = JSON.stringify(qrPayload);
     console.log(chalk.bold('\n🚀 Happy Direct Connect'));
     console.log(chalk.dim(`Agent: ${opts.agent}  |  Port: ${opts.port}`));
@@ -179,12 +238,20 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     console.log(chalk.dim('\nPayload: ') + qrJson);
     console.log(chalk.dim('Waiting for connection…\n'));
 
-    // Keep process alive until SIGINT/SIGTERM
+    if (opts.agent === 'gemini' && !opts.geminiApiKey) {
+        console.log(chalk.yellow(
+            'Note: No GEMINI_API_KEY or GOOGLE_API_KEY found in environment.\n' +
+            '      Gemini CLI will use its own stored credentials if available.'
+        ));
+    }
+
+    // ── Keep alive ────────────────────────────────────────────────────────────
     await new Promise<void>((resolve) => {
         process.on('SIGINT', resolve);
         process.on('SIGTERM', resolve);
     });
 
     abortController.abort();
+    geminiSession?.dispose();
     server.close();
 }
