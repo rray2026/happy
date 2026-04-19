@@ -60,7 +60,7 @@ export default memo(function Restore() {
     const [directConnecting, handleDirectConnect] = useHappyAction(async () => {
         if (Platform.OS !== 'web') return;
 
-        const trimmed = directJson.trim();
+        const trimmed = directJson.trim().replace(/[\r\n]+/g, '');
         if (!trimmed) {
             Modal.alert('Error', 'Please paste the JSON payload from the CLI terminal.');
             return;
