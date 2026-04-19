@@ -14,7 +14,7 @@
  *   ← sessionUpdate notifications (streaming chunks)
  *      update.sessionUpdate = 'agent_message_chunk' → textDelta
  *      update.sessionUpdate = 'tool_call'           → tool usage
- *   ← requestPermission (server→client, needs response — auto-approved)
+ *   ← requestPermission (server→client, forwarded to webapp via onPermissionRequest callback)
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -39,6 +39,13 @@ type JsonRpcMsg = {
 };
 
 export type BroadcastFn = (event: unknown) => void;
+
+/**
+ * Called when Gemini requests permission for a tool call.
+ * Receives a unique permissionId (for correlation), the tool name, and input params.
+ * Must resolve to true (approve) or false (deny).
+ */
+export type PermissionRequestFn = (permissionId: string, toolName: string, input: unknown) => Promise<boolean>;
 
 /**
  * Convert an ACP session update into a Claude-compatible broadcast event.
@@ -85,10 +92,12 @@ export class GeminiAcpSession {
     private idleResolve: (() => void) | null = null;
     private readonly broadcast: BroadcastFn;
     private readonly apiKey: string | undefined;
+    private readonly onPermissionRequest: PermissionRequestFn | undefined;
 
-    constructor(opts: { broadcast: BroadcastFn; apiKey?: string }) {
+    constructor(opts: { broadcast: BroadcastFn; apiKey?: string; onPermissionRequest?: PermissionRequestFn }) {
         this.broadcast = opts.broadcast;
         this.apiKey = opts.apiKey;
+        this.onPermissionRequest = opts.onPermissionRequest;
     }
 
     // ── Public ────────────────────────────────────────────────────────────────
@@ -227,10 +236,22 @@ export class GeminiAcpSession {
             return;
         }
 
-        // Server→client permission request (needs synchronous JSON-RPC response)
+        // Server→client permission request — forward to webapp if handler provided, else auto-approve
         if (msg.id !== undefined && msg.method === 'requestPermission') {
-            logger.debug('[GeminiAcp] requestPermission — auto-approving');
-            this.write({ jsonrpc: '2.0', id: msg.id, result: { approved: true } });
+            const params = msg.params as Record<string, unknown> | undefined;
+            const toolName = (params?.toolName as string | undefined) ?? 'unknown';
+            const input = params?.input ?? params ?? {};
+            const permissionId = randomUUID();
+            const msgId = msg.id;
+            if (this.onPermissionRequest) {
+                logger.debug('[GeminiAcp] requestPermission — forwarding to webapp, permissionId:', permissionId);
+                this.onPermissionRequest(permissionId, toolName, input)
+                    .then((approved) => this.write({ jsonrpc: '2.0', id: msgId, result: { approved } }))
+                    .catch(() => this.write({ jsonrpc: '2.0', id: msgId, result: { approved: false } }));
+            } else {
+                logger.debug('[GeminiAcp] requestPermission — auto-approving (no handler)');
+                this.write({ jsonrpc: '2.0', id: msgId, result: { approved: true } });
+            }
             return;
         }
 
