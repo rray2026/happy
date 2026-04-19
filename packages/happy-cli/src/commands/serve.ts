@@ -9,39 +9,21 @@ import { logger } from '@/ui/logger';
 import { generateCliKeys, buildQRPayload } from '@/server/directAuth';
 import { startWsServer } from '@/server/wsServer';
 
-/** Supported agent types for `happy serve` */
-type AgentType = 'claude' | 'gemini';
-
 interface ServeOptions {
-    agent: AgentType;
     port: number;
     /** Public WebSocket endpoint advertised in the QR code */
     endpoint: string;
-    /** Extra args forwarded to the agent CLI */
+    /** Extra args forwarded to claude */
     agentArgs: string[];
 }
 
 function parseArgs(args: string[]): ServeOptions {
-    let agent: AgentType = 'claude';
-    const agentArgs: string[] = [];
-
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
-        if (arg === '--claude') {
-            agent = 'claude';
-        } else if (arg === '--gemini') {
-            agent = 'gemini';
-        } else {
-            agentArgs.push(arg);
-        }
-    }
-
     const port = parseInt(process.env.HAPPY_SERVE_PORT ?? '4000', 10);
     const endpoint =
         process.env.HAPPY_SERVE_ENDPOINT ??
         `ws://localhost:${port}`;
 
-    return { agent, port, endpoint, agentArgs };
+    return { port, endpoint, agentArgs: args };
 }
 
 /**
@@ -50,7 +32,6 @@ function parseArgs(args: string[]): ServeOptions {
  * Returns a promise that resolves when the process exits.
  */
 async function runAgentProcess(opts: {
-    agent: AgentType;
     prompt: string;
     resumeSessionId: string | null;
     agentArgs: string[];
@@ -58,7 +39,7 @@ async function runAgentProcess(opts: {
     onSessionId: (id: string) => void;
     abort: AbortSignal;
 }): Promise<number> {
-    const { agent, prompt, resumeSessionId, agentArgs, onEvent, onSessionId, abort } = opts;
+    const { prompt, resumeSessionId, agentArgs, onEvent, onSessionId, abort } = opts;
 
     const cliArgs: string[] = ['--print', '--output-format', 'stream-json', '--verbose'];
     if (resumeSessionId) {
@@ -66,10 +47,10 @@ async function runAgentProcess(opts: {
     }
     cliArgs.push(...agentArgs, prompt);
 
-    logger.debug(`[serve] Spawning ${agent} with args: ${JSON.stringify(cliArgs)}`);
+    logger.debug(`[serve] Spawning claude with args: ${JSON.stringify(cliArgs)}`);
 
     return new Promise<number>((resolve) => {
-        const child = spawn(agent, cliArgs, {
+        const child = spawn('claude', cliArgs, {
             stdio: ['ignore', 'pipe', 'inherit'],
             cwd: process.cwd(),
             signal: abort,
@@ -98,11 +79,11 @@ async function runAgentProcess(opts: {
 }
 
 /**
- * `happy serve [--claude|--gemini] [agentArgs…]`
+ * `happy serve [agentArgs…]`
  *
  * Starts an embedded WebSocket server on localhost and displays a QR code.
  * The webapp scans the QR code to connect directly to this machine.
- * User inputs from the webapp are forwarded to the agent subprocess.
+ * User inputs from the webapp are forwarded to a claude subprocess.
  */
 export async function handleServeCommand(args: string[]): Promise<void> {
     const opts = parseArgs(args);
@@ -126,7 +107,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
         try {
             await runAgentProcess({
-                agent: opts.agent,
                 prompt: text,
                 resumeSessionId: agentSessionId,
                 agentArgs: opts.agentArgs,
@@ -172,8 +152,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
     // Display QR code
     console.log(chalk.bold('\n🚀 Happy Direct Connect'));
-    console.log(chalk.dim(`Agent: ${opts.agent}  |  Port: ${opts.port}`));
-    console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
+    console.log(chalk.dim(`Port: ${opts.port}  |  Endpoint: ${opts.endpoint}\n`));
     displayQRCode(JSON.stringify(qrPayload));
     console.log(chalk.yellow('\nScan the QR code with the Happy webapp to connect.'));
     console.log(chalk.dim('Waiting for connection…\n'));
