@@ -140,6 +140,8 @@ export const pl: TranslationStructure = {
         whatsNew: 'Co nowego',
         whatsNewSubtitle: 'Zobacz najnowsze aktualizacje i ulepszenia',
         reportIssue: 'Zgłoś problem',
+        errorLogs: 'Dziennik błędów',
+        errorLogsSubtitle: 'Przeglądaj i kopiuj diagnostykę aplikacji',
         privacyPolicy: 'Polityka prywatności',
         termsOfService: 'Warunki użytkowania',
         eula: 'EULA',

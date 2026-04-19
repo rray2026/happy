@@ -379,6 +379,12 @@ export const SettingsView = React.memo(function SettingsView() {
                     onPress={handleGitHub}
                 />
                 <Item
+                    title={t('settings.errorLogs')}
+                    subtitle={t('settings.errorLogsSubtitle')}
+                    icon={<Ionicons name="document-text-outline" size={29} color="#FF9500" />}
+                    onPress={() => router.push('/settings/error-logs')}
+                />
+                <Item
                     title={t('settings.reportIssue')}
                     icon={<Ionicons name="bug-outline" size={29} color="#FF3B30" />}
                     onPress={handleReportIssue}

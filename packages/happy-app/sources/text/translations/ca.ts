@@ -123,6 +123,8 @@ export const ca: TranslationStructure = {
         whatsNew: 'Novetats',
         whatsNewSubtitle: 'Mira les últimes actualitzacions i millores',
         reportIssue: 'Informa d\'un problema',
+        errorLogs: 'Registre d\'errors',
+        errorLogsSubtitle: 'Visualitza i copia diagnòstics de l\'app',
         privacyPolicy: 'Política de privadesa',
         termsOfService: 'Condicions del servei',
         eula: 'EULA',

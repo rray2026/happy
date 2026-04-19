@@ -112,6 +112,8 @@ export const ru: TranslationStructure = {
         whatsNew: 'Что нового',
         whatsNewSubtitle: 'Посмотреть последние обновления и улучшения',
         reportIssue: 'Сообщить о проблеме',
+        errorLogs: 'Журнал ошибок',
+        errorLogsSubtitle: 'Просмотр и копирование диагностики',
         privacyPolicy: 'Политика конфиденциальности',
         termsOfService: 'Условия использования',
         eula: 'EULA',

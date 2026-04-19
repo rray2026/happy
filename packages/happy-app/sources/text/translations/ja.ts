@@ -125,6 +125,8 @@ export const ja: TranslationStructure = {
         whatsNew: '新機能',
         whatsNewSubtitle: '最新のアップデートと改善を確認',
         reportIssue: '問題を報告',
+        errorLogs: 'エラーログ',
+        errorLogsSubtitle: 'アプリの診断情報を表示・コピー',
         privacyPolicy: 'プライバシーポリシー',
         termsOfService: '利用規約',
         eula: 'EULA',

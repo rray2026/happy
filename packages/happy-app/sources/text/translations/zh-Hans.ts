@@ -125,6 +125,8 @@ export const zhHans: TranslationStructure = {
         whatsNew: '更新日志',
         whatsNewSubtitle: '查看最新更新和改进',
         reportIssue: '报告问题',
+        errorLogs: '错误日志',
+        errorLogsSubtitle: '查看和复制应用诊断信息',
         privacyPolicy: '隐私政策',
         termsOfService: '服务条款',
         eula: '最终用户许可协议',

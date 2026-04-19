@@ -138,6 +138,8 @@ export const en: TranslationStructure = {
         whatsNew: 'What\'s New',
         whatsNewSubtitle: 'See the latest updates and improvements',
         reportIssue: 'Report an Issue',
+        errorLogs: 'Error Logs',
+        errorLogsSubtitle: 'View and copy app diagnostics',
         privacyPolicy: 'Privacy Policy',
         termsOfService: 'Terms of Service',
         eula: 'EULA',
