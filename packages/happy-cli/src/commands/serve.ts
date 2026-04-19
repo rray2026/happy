@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
-import { configuration } from '@/configuration';
 import { displayQRCode } from '@/ui/qrcode';
 import { logger } from '@/ui/logger';
 import { generateCliKeys, buildQRPayload } from '@/server/directAuth';
