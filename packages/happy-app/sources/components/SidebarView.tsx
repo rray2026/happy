@@ -1,4 +1,4 @@
-import { useSocketStatus, useFriendRequests, useSettings } from '@/sync/storage';
+import { useSocketStatus, useSettings } from '@/sync/storage';
 import * as React from 'react';
 import { Text, View, Pressable, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,7 +13,6 @@ import { MainView } from './MainView';
 import { Image } from 'expo-image';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
-import { useInboxHasContent } from '@/hooks/useInboxHasContent';
 import { Ionicons } from '@expo/vector-icons';
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
@@ -137,8 +136,6 @@ export const SidebarView = React.memo(() => {
     const headerHeight = useHeaderHeight();
     const socketStatus = useSocketStatus();
     const realtimeStatus = useRealtimeStatus();
-    const friendRequests = useFriendRequests();
-    const inboxHasContent = useInboxHasContent();
     const settings = useSettings();
 
     // Compute connection status once per render (theme-reactive, no stale memoization)
@@ -237,28 +234,6 @@ export const SidebarView = React.memo(() => {
 
                     {/* Navigation icons */}
                     <View style={styles.rightContainer}>
-                        <Pressable
-                            onPress={() => router.push('/(app)/inbox')}
-                            hitSlop={15}
-                            style={styles.notificationButton}
-                        >
-                            <Image
-                                source={require('@/assets/images/brutalist/Brutalism-27.png')}
-                                contentFit="contain"
-                                style={[{ width: 32, height: 32 }]}
-                                tintColor={theme.colors.header.tint}
-                            />
-                            {friendRequests.length > 0 && (
-                                <View style={styles.badge}>
-                                    <Text style={styles.badgeText}>
-                                        {friendRequests.length > 99 ? '99+' : friendRequests.length}
-                                    </Text>
-                                </View>
-                            )}
-                            {inboxHasContent && friendRequests.length === 0 && (
-                                <View style={styles.indicatorDot} />
-                            )}
-                        </Pressable>
                         <Pressable
                             onPress={() => router.push('/settings')}
                             hitSlop={15}
