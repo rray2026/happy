@@ -4,8 +4,11 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { Modal } from '@/modal';
+import { useRouter } from 'expo-router';
 
 export default function DevScreen() {
+    const router = useRouter();
+
     const handleClearCache = async () => {
         const confirmed = await Modal.confirm(
             'Clear Cache',
@@ -20,6 +23,14 @@ export default function DevScreen() {
 
     return (
         <ItemList>
+            <ItemGroup title="Logs">
+                <Item
+                    title="View Logs"
+                    subtitle="View all application logs"
+                    icon={<Ionicons name="document-text-outline" size={28} color="#007AFF" />}
+                    onPress={() => router.push('/dev/logs')}
+                />
+            </ItemGroup>
             <ItemGroup title="Actions" footer="These actions may affect app stability">
                 <Item
                     title="Test Crash"
