@@ -66,7 +66,14 @@ interface ClaudeSystemEvent {
     session_id?: string;
 }
 
-type ClaudeEvent = ClaudeAssistantEvent | ClaudeUserEvent | ClaudeResultEvent | ClaudeSystemEvent | { type: string };
+interface PermissionRequestEvent {
+    type: 'permission-request';
+    permissionId: string;
+    toolName: string;
+    input: unknown;
+}
+
+type ClaudeEvent = ClaudeAssistantEvent | ClaudeUserEvent | ClaudeResultEvent | ClaudeSystemEvent | PermissionRequestEvent | { type: string };
 
 // ── Display item types ────────────────────────────────────────────────────────
 
@@ -169,11 +176,16 @@ export default memo(function DirectSessionScreen() {
     const [logPath, setLogPath] = useState('');
     const [logsLoading, setLogsLoading] = useState(false);
     const logsScrollRef = useRef<ScrollView>(null);
+    const [permissionRequest, setPermissionRequest] = useState<PermissionRequestEvent | null>(null);
 
     // Subscribe to socket status and messages
     useEffect(() => {
         const unsubStatus = directSocket.onStatusChange(setStatus);
         const unsubMsg = directSocket.onMessage((payload) => {
+            if ((payload as PermissionRequestEvent).type === 'permission-request') {
+                setPermissionRequest(payload as PermissionRequestEvent);
+                return;
+            }
             const newItems = eventToItems(payload as ClaudeEvent);
             if (newItems.length > 0) {
                 setItems((prev) => [...prev, ...newItems]);
@@ -208,6 +220,16 @@ export default memo(function DirectSessionScreen() {
         setInputText('');
     }, [inputText, status]);
 
+    const handlePermission = useCallback((approved: boolean) => {
+        if (!permissionRequest) return;
+        const id = Math.random().toString(36).slice(2);
+        directSocket.rpc(id, 'permissionResponse', {
+            permissionId: permissionRequest.permissionId,
+            approved,
+        }).catch(() => {});
+        setPermissionRequest(null);
+    }, [permissionRequest]);
+
     const handleDisconnect = useCallback(() => {
         directSocket.disconnect();
         TokenStorage.removeDirectCredentials();
@@ -240,6 +262,40 @@ export default memo(function DirectSessionScreen() {
             style={styles.flex}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
+            {/* Permission request modal */}
+            <Modal
+                visible={permissionRequest !== null}
+                animationType="fade"
+                transparent
+                onRequestClose={() => handlePermission(false)}
+            >
+                <View style={styles.permOverlay}>
+                    <View style={styles.permCard}>
+                        <Text style={styles.permTitle}>Permission Request</Text>
+                        <Text style={styles.permTool}>{permissionRequest?.toolName}</Text>
+                        <ScrollView style={styles.permInputScroll}>
+                            <Text style={styles.permInput}>
+                                {JSON.stringify(permissionRequest?.input, null, 2)}
+                            </Text>
+                        </ScrollView>
+                        <View style={styles.permActions}>
+                            <TouchableOpacity
+                                onPress={() => handlePermission(false)}
+                                style={[styles.permBtn, styles.permDeny]}
+                            >
+                                <Text style={[styles.permBtnText, { color: '#FF3B30' }]}>Deny</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => handlePermission(true)}
+                                style={[styles.permBtn, styles.permApprove]}
+                            >
+                                <Text style={[styles.permBtnText, { color: '#34C759' }]}>Approve</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
             {/* Logs modal */}
             <Modal visible={logsVisible} animationType="slide" onRequestClose={() => setLogsVisible(false)}>
                 <View style={styles.logsModal}>
@@ -590,5 +646,65 @@ const styles = StyleSheet.create((theme) => ({
     },
     sendBtnDisabled: {
         opacity: 0.4,
+    },
+    permOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+    },
+    permCard: {
+        backgroundColor: theme.colors.surface,
+        borderRadius: 16,
+        padding: 20,
+        width: '100%',
+        maxWidth: 400,
+        gap: 12,
+    },
+    permTitle: {
+        fontSize: 17,
+        fontWeight: '600',
+        color: theme.colors.text,
+    },
+    permTool: {
+        fontSize: 14,
+        color: theme.colors.text,
+        fontFamily: 'IBMPlexMono-Regular',
+        backgroundColor: theme.colors.input.background,
+        padding: 8,
+        borderRadius: 8,
+    },
+    permInputScroll: {
+        maxHeight: 150,
+        backgroundColor: theme.colors.input.background,
+        borderRadius: 8,
+    },
+    permInput: {
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        fontFamily: 'IBMPlexMono-Regular',
+        padding: 8,
+    },
+    permActions: {
+        flexDirection: 'row',
+        gap: 12,
+        marginTop: 4,
+    },
+    permBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 10,
+        alignItems: 'center',
+    },
+    permDeny: {
+        backgroundColor: 'rgba(255,59,48,0.15)',
+    },
+    permApprove: {
+        backgroundColor: 'rgba(52,199,89,0.15)',
+    },
+    permBtnText: {
+        fontSize: 15,
+        fontWeight: '600',
     },
 }));

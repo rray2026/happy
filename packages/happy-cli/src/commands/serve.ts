@@ -140,9 +140,21 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     let claudeRunning = false;
     const abortController = new AbortController();
 
+    // ── Permission forwarding (Gemini → webapp) ──────────────────────────────
+    const permissionPending = new Map<string, (approved: boolean) => void>();
+
     // ── Gemini ACP session (created lazily, kept alive) ─────────────────────
     const geminiSession = opts.agent === 'gemini'
-        ? new GeminiAcpSession({ broadcast: (e) => server.broadcast(e), apiKey: opts.geminiApiKey })
+        ? new GeminiAcpSession({
+            broadcast: (e) => server.broadcast(e),
+            apiKey: opts.geminiApiKey,
+            onPermissionRequest: (permissionId, toolName, input) => {
+                return new Promise<boolean>((resolve) => {
+                    permissionPending.set(permissionId, resolve);
+                    server.broadcast({ type: 'permission-request', permissionId, toolName, input });
+                });
+            },
+        })
         : null;
 
     // ── Input handler ────────────────────────────────────────────────────────
@@ -202,6 +214,14 @@ export async function handleServeCommand(args: string[]): Promise<void> {
             if (method === 'abort') {
                 abortController.abort();
                 geminiSession?.dispose();
+                server.sendRpcResponse(id, { ok: true });
+            } else if (method === 'permissionResponse') {
+                const p = params as { permissionId: string; approved: boolean };
+                const resolver = permissionPending.get(p.permissionId);
+                if (resolver) {
+                    permissionPending.delete(p.permissionId);
+                    resolver(p.approved);
+                }
                 server.sendRpcResponse(id, { ok: true });
             } else if (method === 'getLogs') {
                 const lines = parseInt(
