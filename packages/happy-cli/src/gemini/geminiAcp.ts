@@ -31,8 +31,8 @@ import { logger } from '@/ui/logger';
 
 /** ms to wait for initialize / session/new handshake */
 const INIT_TIMEOUT_MS = 20_000;
-/** ms total timeout per prompt turn */
-const PROMPT_TIMEOUT_MS = 120_000;
+/** ms total timeout per prompt turn (complex multi-step tasks can take several minutes) */
+const PROMPT_TIMEOUT_MS = 300_000;
 
 type JsonRpcMsg = {
     jsonrpc: '2.0';
@@ -156,7 +156,15 @@ export class GeminiAcpSession {
         if (!this.proc || !this.acpSessionId) {
             await this.startAndInit();
         }
-        await this.doPrompt(text);
+        try {
+            await this.doPrompt(text);
+        } catch (err) {
+            // On any prompt error (timeout, RPC error, etc.) reset the session so
+            // the next sendPrompt() starts fresh with a new gemini process.
+            logger.debug('[GeminiAcp] prompt error — resetting session:', (err as Error).message);
+            this.dispose();
+            throw err;
+        }
     }
 
     dispose(): void {
@@ -260,10 +268,10 @@ export class GeminiAcpSession {
     // ── Private: incoming message routing ────────────────────────────────────
 
     private handleIncoming(msg: JsonRpcMsg): void {
-        logger.debug('[GeminiAcp] ←', msg.method ?? `(id=${msg.id})`);
-
         // Response to one of our RPCs
         if (msg.id !== undefined && msg.method === undefined) {
+            logger.debug('[GeminiAcp] ← rpc response (id=%s)%s', msg.id,
+                msg.error ? ` ERROR ${msg.error.code}: ${msg.error.message}` : '');
             const resolver = this.pending.get(String(msg.id));
             if (resolver) resolver(msg);
             return;
@@ -282,13 +290,17 @@ export class GeminiAcpSession {
             const denyOptionId = options.find(o => o.kind.startsWith('reject') || o.optionId === 'cancel')?.optionId ?? 'cancel';
             const permissionId = randomUUID();
             const msgId = msg.id;
+            logger.debug('[GeminiAcp] ← permission request: "%s" permissionId=%s', toolName, permissionId);
             if (this.onPermissionRequest) {
-                logger.debug('[GeminiAcp] session/request_permission — forwarding to webapp, permissionId:', permissionId);
                 this.onPermissionRequest(permissionId, toolName, input)
-                    .then((approved) => this.write({ jsonrpc: '2.0', id: msgId, result: { optionId: approved ? approveOptionId : denyOptionId } }))
+                    .then((approved) => {
+                        const optionId = approved ? approveOptionId : denyOptionId;
+                        logger.debug('[GeminiAcp] → permission response: %s (%s)', optionId, toolName);
+                        this.write({ jsonrpc: '2.0', id: msgId, result: { optionId } });
+                    })
                     .catch(() => this.write({ jsonrpc: '2.0', id: msgId, result: { optionId: denyOptionId } }));
             } else {
-                logger.debug('[GeminiAcp] session/request_permission — auto-approving (no handler)');
+                logger.debug('[GeminiAcp] ← permission request: "%s" — auto-approving', toolName);
                 this.write({ jsonrpc: '2.0', id: msgId, result: { optionId: approveOptionId } });
             }
             return;
@@ -299,9 +311,28 @@ export class GeminiAcpSession {
             const update = (msg.params as { update?: Record<string, unknown> } | undefined)?.update;
             if (!update) return;
 
+            // Log each update kind with useful context
+            const updateKind = update.sessionUpdate as string | undefined;
+            if (updateKind === 'agent_message_chunk') {
+                const text = (update.content as { text?: string } | undefined)?.text ?? '';
+                logger.debug('[GeminiAcp] ← text chunk (%d chars)', text.length);
+            } else if (updateKind === 'agent_thought_chunk') {
+                const text = (update.content as { text?: string } | undefined)?.text ?? '';
+                logger.debug('[GeminiAcp] ← thinking (%d chars)', text.length);
+            } else if (updateKind === 'tool_call') {
+                const title = (update.title as string | undefined) ?? update.kind ?? '?';
+                const status = update.status ?? '?';
+                logger.debug('[GeminiAcp] ← tool_call: "%s" status=%s id=%s', title, status, update.toolCallId);
+            } else if (updateKind === 'tool_call_update') {
+                const title = (update.title as string | undefined) ?? update.kind ?? '?';
+                const status = update.status ?? '?';
+                logger.debug('[GeminiAcp] ← tool_call_update: "%s" status=%s id=%s', title, status, update.toolCallId);
+            } else if (updateKind) {
+                logger.debug('[GeminiAcp] ← session/update kind=%s', updateKind);
+            }
+
             // Flush accumulated text before broadcasting a tool event so that
             // any preceding assistant text arrives before the tool card.
-            const updateKind = update.sessionUpdate as string | undefined;
             if (updateKind === 'tool_call' || updateKind === 'tool_call_update') {
                 this.flushAccum();
             }
