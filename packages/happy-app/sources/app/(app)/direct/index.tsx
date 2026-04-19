@@ -80,7 +80,7 @@ type ClaudeEvent = ClaudeAssistantEvent | ClaudeUserEvent | ClaudeResultEvent | 
 type DisplayItem =
     | { kind: 'user'; text: string; id: string }
     | { kind: 'assistant'; text: string; id: string }
-    | { kind: 'tool'; name: string; id: string }
+    | { kind: 'tool-group'; names: string[]; id: string }
     | { kind: 'result'; text: string; success: boolean; id: string }
     | { kind: 'status'; text: string; id: string };
 
@@ -122,8 +122,9 @@ function eventToItems(event: ClaudeEvent): DisplayItem[] {
             if (text) {
                 items.push({ kind: 'assistant', text, id: nextId() });
             }
-            for (const name of extractToolNames(ae)) {
-                items.push({ kind: 'tool', name, id: nextId() });
+            const toolNames = extractToolNames(ae);
+            if (toolNames.length > 0) {
+                items.push({ kind: 'tool-group', names: toolNames, id: nextId() });
             }
             return items;
         }
@@ -191,7 +192,20 @@ export default memo(function DirectSessionScreen() {
             }
             const newItems = eventToItems(payload as ClaudeEvent);
             if (newItems.length > 0) {
-                setItems((prev) => [...prev, ...newItems]);
+                setItems((prev) => {
+                    const merged = [...prev];
+                    for (const item of newItems) {
+                        if (item.kind === 'tool-group') {
+                            const last = merged[merged.length - 1];
+                            if (last?.kind === 'tool-group') {
+                                merged[merged.length - 1] = { ...last, names: [...last.names, ...item.names] };
+                                continue;
+                            }
+                        }
+                        merged.push(item);
+                    }
+                    return merged;
+                });
             }
         });
 
@@ -415,13 +429,8 @@ const MessageItem = memo(function MessageItem({ item }: { item: DisplayItem }) {
                     <Text style={styles.assistantText}>{item.text}</Text>
                 </View>
             );
-        case 'tool':
-            return (
-                <View style={styles.toolRow}>
-                    <Ionicons name="construct-outline" size={13} color="#8E8E93" />
-                    <Text style={styles.toolText}>{item.name}</Text>
-                </View>
-            );
+        case 'tool-group':
+            return <ToolGroupItem names={item.names} />;
         case 'result':
             return (
                 <View style={[styles.resultRow, item.success ? styles.resultSuccess : styles.resultError]}>
@@ -438,6 +447,27 @@ const MessageItem = memo(function MessageItem({ item }: { item: DisplayItem }) {
         case 'status':
             return <Text style={styles.statusMeta}>{item.text}</Text>;
     }
+});
+
+// ── ToolGroupItem ──────────────────────────────────────────────────────────
+
+const ToolGroupItem = memo(function ToolGroupItem({ names }: { names: string[] }) {
+    const [collapsed, setCollapsed] = useState(true);
+    const label = names.length === 1 ? names[0] : `${names.length} tool calls`;
+    return (
+        <TouchableOpacity onPress={() => setCollapsed((c) => !c)} activeOpacity={0.7} style={styles.toolGroup}>
+            <View style={styles.toolGroupHeader}>
+                <Ionicons name="construct-outline" size={13} color="#8E8E93" />
+                <Text style={styles.toolGroupLabel}>{label}</Text>
+                <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-down'} size={12} color="#8E8E93" />
+            </View>
+            {!collapsed && names.length > 1 && names.map((name, i) => (
+                <View key={i} style={styles.toolGroupRow}>
+                    <Text style={styles.toolText}>{name}</Text>
+                </View>
+            ))}
+        </TouchableOpacity>
+    );
 });
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -584,11 +614,23 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: 15,
         lineHeight: 22,
     },
-    toolRow: {
+    toolGroup: {
+        paddingLeft: 4,
+    },
+    toolGroupHeader: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-        paddingLeft: 4,
+    },
+    toolGroupLabel: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        fontFamily: 'IBMPlexMono-Regular',
+        flex: 1,
+    },
+    toolGroupRow: {
+        paddingLeft: 17,
+        paddingTop: 2,
     },
     toolText: {
         fontSize: 12,
