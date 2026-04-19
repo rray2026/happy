@@ -122,6 +122,8 @@ export const it: TranslationStructure = {
         whatsNew: 'Novità',
         whatsNewSubtitle: 'Scopri gli ultimi aggiornamenti e miglioramenti',
         reportIssue: 'Segnala un problema',
+        errorLogs: 'Log degli errori',
+        errorLogsSubtitle: 'Visualizza e copia la diagnostica',
         privacyPolicy: 'Informativa sulla privacy',
         termsOfService: 'Termini di servizio',
         eula: 'EULA',

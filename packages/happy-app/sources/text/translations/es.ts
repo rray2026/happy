@@ -123,6 +123,8 @@ export const es: TranslationStructure = {
         whatsNew: 'Novedades',
         whatsNewSubtitle: 'Ve las últimas actualizaciones y mejoras',
         reportIssue: 'Reportar un problema',
+        errorLogs: 'Registros de errores',
+        errorLogsSubtitle: 'Ver y copiar diagnósticos de la app',
         privacyPolicy: 'Política de privacidad',
         termsOfService: 'Términos de servicio',
         eula: 'EULA',

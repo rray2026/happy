@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import { configuration } from '@/configuration';
 import { displayQRCode } from '@/ui/qrcode';
@@ -149,11 +150,19 @@ export async function handleServeCommand(args: string[]): Promise<void> {
         sessionId,
         cliKeys,
         qrPayload,
-        onRpc: async (id, method, _params) => {
-            // Minimal RPC: only abort is supported for now
+        onRpc: async (id, method, params) => {
             if (method === 'abort') {
                 abortController.abort();
                 server.sendRpcResponse(id, { ok: true });
+            } else if (method === 'getLogs') {
+                const lines = parseInt((params as Record<string, unknown>)?.lines as string ?? '200', 10);
+                try {
+                    const content = readFileSync(logger.getLogPath(), 'utf8');
+                    const allLines = content.split('\n').filter(Boolean);
+                    server.sendRpcResponse(id, { lines: allLines.slice(-lines), logPath: logger.getLogPath() });
+                } catch {
+                    server.sendRpcResponse(id, { lines: [], logPath: logger.getLogPath() });
+                }
             } else {
                 server.sendRpcResponse(id, null, `unknown method: ${method}`);
             }

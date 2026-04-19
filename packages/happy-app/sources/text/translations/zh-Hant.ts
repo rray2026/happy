@@ -124,6 +124,8 @@ export const zhHant: TranslationStructure = {
         whatsNew: '更新日誌',
         whatsNewSubtitle: '查看最新更新和改進',
         reportIssue: '回報問題',
+        errorLogs: '錯誤日誌',
+        errorLogsSubtitle: '查看並複製應用診斷資訊',
         privacyPolicy: '隱私權政策',
         termsOfService: '服務條款',
         eula: '終端使用者授權協議',

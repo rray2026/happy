@@ -93,7 +93,8 @@ export default memo(function Restore() {
                     resolve();
                 } else if (status === 'error') {
                     cleanup();
-                    reject(new Error('Connection failed — check that the CLI server is reachable.'));
+                    const reason = directSocket.getLastErrorReason();
+                    reject(new Error(reason ?? 'Connection failed — check that the CLI server is reachable.'));
                 }
             });
             directSocket.connectFirstTime(payload, webappPublicKey);

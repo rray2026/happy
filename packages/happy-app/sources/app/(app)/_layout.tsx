@@ -106,6 +106,13 @@ export default function RootLayout() {
                 }}
             />
             <Stack.Screen
+                name="settings/error-logs"
+                options={{
+                    headerTitle: t('settings.errorLogs'),
+                    headerBackTitle: t('common.back'),
+                }}
+            />
+            <Stack.Screen
                 name="settings/appearance"
                 options={{
                     headerTitle: t('settings.appearance'),

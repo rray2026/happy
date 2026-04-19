@@ -30,7 +30,7 @@ export function useHappyAction(action: () => Promise<void>) {
                             Modal.alert('Error', e.message, [{ text: 'OK', style: 'cancel' }]);
                             break;
                         } else {
-                            Modal.alert('Error', 'Unknown error', [{ text: 'OK', style: 'cancel' }]);
+                            Modal.alert('Error', e instanceof Error ? e.message : 'Unknown error', [{ text: 'OK', style: 'cancel' }]);
                             break;
                         }
                     }

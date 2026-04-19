@@ -123,6 +123,8 @@ export const pt: TranslationStructure = {
         whatsNew: 'Novidades',
         whatsNewSubtitle: 'Veja as atualizações e melhorias mais recentes',
         reportIssue: 'Relatar um problema',
+        errorLogs: 'Registros de erros',
+        errorLogsSubtitle: 'Visualizar e copiar diagnósticos',
         privacyPolicy: 'Política de privacidade',
         termsOfService: 'Termos de serviço',
         eula: 'EULA',
