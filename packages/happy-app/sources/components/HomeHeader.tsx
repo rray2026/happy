@@ -165,6 +165,20 @@ function HeaderLeft() {
 function HeaderTitleWithSubtitle({ subtitle }: { subtitle?: string }) {
     const socketStatus = useSocketStatus();
     const styles = stylesheet;
+    const router = useRouter();
+    const tapCount = React.useRef(0);
+    const tapTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const handleTitlePress = React.useCallback(() => {
+        tapCount.current += 1;
+        if (tapTimer.current) clearTimeout(tapTimer.current);
+        if (tapCount.current >= 7) {
+            tapCount.current = 0;
+            router.push('/dev');
+            return;
+        }
+        tapTimer.current = setTimeout(() => { tapCount.current = 0; }, 1500);
+    }, [router]);
 
     // Get connection status styling (matching sessionUtils.ts pattern)
     const getConnectionStatus = () => {
@@ -213,7 +227,7 @@ function HeaderTitleWithSubtitle({ subtitle }: { subtitle?: string }) {
     const showConnectionStatus = !hasCustomSubtitle && connectionStatus.text;
 
     return (
-        <View style={styles.titleContainer}>
+        <Pressable style={styles.titleContainer} onPress={handleTitlePress} hitSlop={8}>
             <Text style={styles.titleText}>
                 {t('sidebar.sessionsTitle')}
             </Text>
@@ -238,6 +252,6 @@ function HeaderTitleWithSubtitle({ subtitle }: { subtitle?: string }) {
                     </Text>
                 </View>
             )}
-        </View>
+        </Pressable>
     );
 }
