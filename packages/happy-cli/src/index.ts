@@ -8,6 +8,9 @@
 
 
 import chalk from 'chalk'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 import { runClaude, StartOptions } from '@/claude/runClaude'
 import { logger } from './ui/logger'
 import { readCredentials, readSettings } from './persistence'
@@ -141,10 +144,6 @@ import { handleServeCommand } from './commands/serve'
       }
       
       try {
-        const { existsSync, readFileSync, writeFileSync, mkdirSync } = require('fs');
-        const { join } = require('path');
-        const { homedir } = require('os');
-        
         const configDir = join(homedir(), '.gemini');
         const configPath = join(configDir, 'config.json');
         
@@ -182,10 +181,6 @@ import { handleServeCommand } from './commands/serve'
     // Handle "happy gemini model get" command
     if (geminiSubcommand === 'model' && args[2] === 'get') {
       try {
-        const { existsSync, readFileSync } = require('fs');
-        const { join } = require('path');
-        const { homedir } = require('os');
-        
         const configPaths = [
           join(homedir(), '.gemini', 'config.json'),
           join(homedir(), '.config', 'gemini', 'config.json'),
