@@ -12,15 +12,19 @@ on:
                     - production
                     - preview
                     - development
+    push:
+        branches: [main]
+        paths:
+            - 'packages/happy-app/**'
 
 # Only one deploy runs at a time; new runs cancel older pending ones.
 concurrency:
-    group: deploy-cloudflare-pages-${{ github.event.inputs.environment }}
+    group: deploy-cloudflare-pages-${{ github.event.inputs.environment || 'production' }}
     cancel-in-progress: true
 
 jobs:
     deploy:
-        name: Build & Deploy (${{ github.event.inputs.environment }})
+        name: Build & Deploy (${{ github.event.inputs.environment || 'production' }})
         runs-on: ubuntu-latest
         timeout-minutes: 20
         permissions:
@@ -48,7 +52,7 @@ jobs:
               working-directory: packages/happy-app
               run: npx expo export --platform web
               env:
-                  APP_ENV: ${{ github.event.inputs.environment }}
+                  APP_ENV: ${{ github.event.inputs.environment || 'production' }}
                   EXPO_PUBLIC_POSTHOG_API_KEY: ${{ secrets.EXPO_PUBLIC_POSTHOG_API_KEY }}
 
             - name: Deploy to Cloudflare Pages
@@ -59,5 +63,5 @@ jobs:
                   command: >
                       pages deploy packages/happy-app/dist
                       --project-name=${{ vars.CF_PAGES_PROJECT_NAME }}
-                      --branch=${{ github.event.inputs.environment == 'production' && 'main' || github.event.inputs.environment }}
+                      --branch=${{ (github.event.inputs.environment || 'production') == 'production' && 'main' || (github.event.inputs.environment || 'production') }}
                       --commit-dirty=true
