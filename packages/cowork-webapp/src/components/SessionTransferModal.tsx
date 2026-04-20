@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
-import { loadStoredCredentials, clearCredentials } from '../directSocket';
-
-const STORAGE_KEY = 'cowork_direct_creds';
+import { sessionClient } from '../session';
+import type { StoredCredentials } from '../types';
 
 interface Props {
     onClose: () => void;
@@ -15,7 +14,7 @@ export function SessionTransferModal({ onClose, onImported }: Props) {
     const [copied, setCopied] = useState(false);
 
     const handleExport = useCallback(() => {
-        const creds = loadStoredCredentials();
+        const creds = sessionClient.loadStoredCredentials();
         if (!creds) {
             setExportJson(null);
             return;
@@ -48,9 +47,9 @@ export function SessionTransferModal({ onClose, onImported }: Props) {
             return;
         }
 
-        const imported = { ...creds, lastSeq: (creds['lastSeq'] as number) ?? -1 };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(imported));
-        clearCredentials();
+        const imported = { ...creds, lastSeq: (creds['lastSeq'] as number) ?? -1 } as StoredCredentials;
+        sessionClient.disconnect();
+        sessionClient.importCredentials(imported);
         onImported();
     }, [importText, onImported]);
 

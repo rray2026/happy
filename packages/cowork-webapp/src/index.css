@@ -268,7 +268,13 @@ html, body, #root {
 
 .tools-group {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
+  width: 100%;
+}
+.tools-header {
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
   background: none;
   border: none;
@@ -278,12 +284,14 @@ html, body, #root {
   font-size: 12px;
   color: var(--text-secondary);
   text-align: left;
-  flex-wrap: wrap;
-  position: relative;
+}
+.tools-header:hover {
+  color: var(--text);
 }
 .tools-icon { flex-shrink: 0; }
 .tools-label { flex: 1; }
 .tools-chevron { flex-shrink: 0; }
+
 .tools-list {
   width: 100%;
   margin: 4px 0 0 18px;
@@ -291,11 +299,31 @@ html, body, #root {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
-.tools-list li {
+.tools-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tools-item-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tools-item-input {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--code-bg);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
 }
 
 .msg-result {
@@ -766,14 +794,104 @@ html, body, #root {
   border-top: 1px solid var(--border);
 }
 
-/* ── Transfer panel (inline in connect card) ── */
+/* ── Transfer entry button (top of connect card) ── */
 
-.transfer-panel {
+.transfer-entry-btn {
+  width: 100%;
+  padding: 10px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.transfer-entry-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Error boundary ── */
+
+.error-boundary {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.error-boundary-card {
+  max-width: 560px;
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.error-boundary-icon {
+  font-size: 36px;
+  text-align: center;
+  color: var(--error);
+}
+
+.error-boundary-title {
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+  margin: 0;
+}
+
+.error-boundary-message {
+  background: var(--code-bg);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--error);
+  margin: 0;
+  word-break: break-word;
+}
+
+.error-boundary-details {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.error-boundary-details summary {
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.error-boundary-stack {
+  background: var(--code-bg);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0;
+  max-height: 260px;
+}
+
+.error-boundary-actions {
+  display: flex;
   gap: 10px;
+  margin-top: 4px;
+}
+
+.error-boundary-actions .connect-btn,
+.error-boundary-actions .forget-btn {
+  flex: 1;
 }

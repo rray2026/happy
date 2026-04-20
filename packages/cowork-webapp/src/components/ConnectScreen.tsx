@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { directSocket, loadStoredCredentials, clearCredentials, getOrCreateWebappKey, type DirectQRPayload, type StoredCredentials } from '../directSocket';
-
-const STORAGE_KEY = 'cowork_direct_creds';
+import { sessionClient } from '../session';
+import type { DirectQRPayload, StoredCredentials } from '../types';
+import { SessionTransferModal } from './SessionTransferModal';
 
 export function ConnectScreen() {
     const navigate = useNavigate();
-    const [stored, setStored] = useState<StoredCredentials | null>(null);
+    const [stored, setStored] = useState<StoredCredentials | null>(() => sessionClient.loadStoredCredentials());
     const [resuming, setResuming] = useState(false);
     const [resumeError, setResumeError] = useState('');
 
@@ -14,15 +14,7 @@ export function ConnectScreen() {
     const [connectError, setConnectError] = useState('');
     const [connecting, setConnecting] = useState(false);
 
-    const [exportJson, setExportJson] = useState<string | null>(null);
-    const [importText, setImportText] = useState('');
-    const [importError, setImportError] = useState('');
-    const [copied, setCopied] = useState(false);
     const [transferOpen, setTransferOpen] = useState(false);
-
-    useEffect(() => {
-        setStored(loadStoredCredentials());
-    }, []);
 
     // ── Resume ────────────────────────────────────────────────────────────────
 
@@ -32,7 +24,7 @@ export function ConnectScreen() {
         setResuming(true);
 
         let unsub: (() => void) | null = null;
-        unsub = directSocket.onStatusChange((status) => {
+        unsub = sessionClient.onStatusChange((status) => {
             if (status === 'connected') {
                 unsub?.();
                 setResuming(false);
@@ -40,20 +32,18 @@ export function ConnectScreen() {
             } else if (status === 'error') {
                 unsub?.();
                 setResuming(false);
-                setResumeError(directSocket.getLastError() ?? 'Reconnection failed.');
+                setResumeError(sessionClient.getLastError() ?? 'Reconnection failed.');
             }
         });
 
-        directSocket.connectFromStored({ ...stored, lastSeq: -1 });
+        sessionClient.connectFromStored(stored);
     };
 
     const handleForget = () => {
-        directSocket.disconnect();
-        clearCredentials();
+        sessionClient.disconnect();
+        sessionClient.clearCredentials();
         setStored(null);
         setResumeError('');
-        setExportJson(null);
-        setTransferOpen(false);
     };
 
     // ── New connection ────────────────────────────────────────────────────────
@@ -77,10 +67,10 @@ export function ConnectScreen() {
         }
 
         setConnecting(true);
-        const webappKey = getOrCreateWebappKey();
+        const webappKey = sessionClient.getOrCreateWebappKey();
 
         let unsub: (() => void) | null = null;
-        unsub = directSocket.onStatusChange((status) => {
+        unsub = sessionClient.onStatusChange((status) => {
             if (status === 'connected') {
                 unsub?.();
                 setConnecting(false);
@@ -88,47 +78,19 @@ export function ConnectScreen() {
             } else if (status === 'error') {
                 unsub?.();
                 setConnecting(false);
-                setConnectError(directSocket.getLastError() ?? 'Connection failed.');
+                setConnectError(sessionClient.getLastError() ?? 'Connection failed.');
             }
         });
 
-        directSocket.connectFirstTime(payload, webappKey);
+        sessionClient.connectFirstTime(payload, webappKey);
     };
 
-    // ── Export / Import ───────────────────────────────────────────────────────
+    // ── Transfer ──────────────────────────────────────────────────────────────
 
-    const handleExport = useCallback(() => {
-        const creds = loadStoredCredentials();
-        setExportJson(creds ? JSON.stringify(creds, null, 2) : null);
-    }, []);
-
-    const handleCopy = useCallback(async () => {
-        if (!exportJson) return;
-        await navigator.clipboard.writeText(exportJson);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    }, [exportJson]);
-
-    const handleImport = useCallback(() => {
-        setImportError('');
-        const raw = importText.trim();
-        if (!raw) { setImportError('请先粘贴 Session JSON。'); return; }
-
-        let creds: Record<string, unknown>;
-        try { creds = JSON.parse(raw) as Record<string, unknown>; }
-        catch { setImportError('无法解析 JSON，请检查格式。'); return; }
-
-        if (!creds['endpoint'] || !creds['sessionCredential'] || !creds['webappPublicKey']) {
-            setImportError('缺少必要字段（endpoint / sessionCredential / webappPublicKey）。');
-            return;
-        }
-
-        const imported = { ...creds, lastSeq: (creds['lastSeq'] as number) ?? -1 } as StoredCredentials;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(imported));
-        setStored(imported);
-        setImportText('');
+    const handleImported = () => {
+        setStored(sessionClient.loadStoredCredentials());
         setTransferOpen(false);
-    }, [importText]);
+    };
 
     // ── Render ────────────────────────────────────────────────────────────────
 
@@ -137,6 +99,10 @@ export function ConnectScreen() {
             <div className="connect-card">
                 <div className="connect-logo">⚡</div>
                 <h1 className="connect-title">Cowork</h1>
+
+                <button className="transfer-entry-btn" onClick={() => setTransferOpen(true)}>
+                    ⇄ Session 迁移（导入 / 导出）
+                </button>
 
                 {stored && (
                     <>
@@ -151,53 +117,11 @@ export function ConnectScreen() {
                                 <button className="connect-btn resume-btn" onClick={handleResume} disabled={resuming}>
                                     {resuming ? '连接中…' : '恢复连接'}
                                 </button>
-                                <button
-                                    className="forget-btn"
-                                    onClick={() => { setTransferOpen(o => !o); if (!transferOpen) handleExport(); }}
-                                    disabled={resuming}
-                                >
-                                    迁移
-                                </button>
                                 <button className="forget-btn" onClick={handleForget} disabled={resuming}>
                                     忘记
                                 </button>
                             </div>
                         </div>
-
-                        {transferOpen && (
-                            <div className="transfer-panel">
-                                <div className="transfer-section-title">导出 — 将此 Session 迁移到其他浏览器</div>
-                                {exportJson
-                                    ? (
-                                        <div className="transfer-json-box">
-                                            <pre className="transfer-json">{exportJson}</pre>
-                                            <button className="transfer-copy-btn" onClick={handleCopy}>
-                                                {copied ? '✓ 已复制' : '复制到剪贴板'}
-                                            </button>
-                                        </div>
-                                    )
-                                    : <p className="transfer-hint-error">未找到已保存的 Session。</p>
-                                }
-                                <div className="transfer-divider" />
-                                <div className="transfer-section-title">导入 — 从其他浏览器导入 Session</div>
-                                <textarea
-                                    className="transfer-textarea"
-                                    value={importText}
-                                    onChange={e => { setImportText(e.target.value); setImportError(''); }}
-                                    placeholder="粘贴从其他浏览器导出的 Session JSON…"
-                                    rows={4}
-                                    spellCheck={false}
-                                />
-                                {importError && <p className="connect-error">{importError}</p>}
-                                <button
-                                    className="transfer-import-btn"
-                                    onClick={handleImport}
-                                    disabled={!importText.trim()}
-                                >
-                                    导入
-                                </button>
-                            </div>
-                        )}
 
                         <div className="connect-divider"><span>或建立新连接</span></div>
                     </>
@@ -223,6 +147,13 @@ export function ConnectScreen() {
                     {connecting ? '连接中…' : '新建连接'}
                 </button>
             </div>
+
+            {transferOpen && (
+                <SessionTransferModal
+                    onClose={() => setTransferOpen(false)}
+                    onImported={handleImported}
+                />
+            )}
         </div>
     );
 }

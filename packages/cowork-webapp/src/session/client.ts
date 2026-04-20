@@ -1,68 +1,49 @@
-export type SocketStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-export type MessageHandler = (payload: unknown, seq: number) => void;
-export type StatusHandler = (status: SocketStatus) => void;
+import type {
+    DirectQRPayload,
+    MessageHandler,
+    RpcResponse,
+    SocketStatus,
+    StatusHandler,
+    StoredCredentials,
+} from '../types';
+import { createBrowserStorage, type CredentialStorage } from './storage';
 
-export interface DirectQRPayload {
-    type: 'direct';
-    endpoint: string;
-    cliSignPublicKey: string;
-    sessionId: string;
-    nonce: string;
-    nonceExpiry: number;
+export type WebSocketFactory = (url: string) => WebSocket;
+
+export interface SessionClientOptions {
+    storage?: CredentialStorage;
+    createWebSocket?: WebSocketFactory;
+    rpcTimeoutMs?: number;
+    maxReconnectDelayMs?: number;
+    initialReconnectDelayMs?: number;
+    /** Test hook. Defaults to `window.location.protocol` in browser. */
+    pageProtocol?: () => string;
 }
 
-export interface StoredCredentials {
-    endpoint: string;
-    cliPublicKey: string;
-    sessionId: string;
-    sessionCredential: string;
-    lastSeq: number;
-    webappPublicKey: string;
-}
+const DEFAULTS = {
+    rpcTimeoutMs: 30_000,
+    maxReconnectDelayMs: 30_000,
+    initialReconnectDelayMs: 1_000,
+};
 
-interface RpcResponse {
-    result?: unknown;
-    error?: string;
-}
-
-const STORAGE_KEY = 'cowork_direct_creds';
-const WEBAPP_KEY_STORAGE = 'cowork_webapp_key';
-const MAX_RECONNECT_DELAY = 30_000;
-const RPC_TIMEOUT = 30_000;
-
-export function getOrCreateWebappKey(): string {
-    let key = localStorage.getItem(WEBAPP_KEY_STORAGE);
-    if (!key) {
-        key = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-        localStorage.setItem(WEBAPP_KEY_STORAGE, key);
-    }
-    return key;
-}
-
-export function loadStoredCredentials(): StoredCredentials | null {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    try { return JSON.parse(raw) as StoredCredentials; } catch { return null; }
-}
-
-function saveCredentials(creds: StoredCredentials): void {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(creds));
-}
-
-export function clearCredentials(): void {
-    localStorage.removeItem(STORAGE_KEY);
-}
-
-class DirectSocket {
+/**
+ * Client that manages the WebSocket session with the CLI server.
+ *
+ * Responsibilities:
+ * - Handshake (first-time via QR payload, resume via stored credential)
+ * - Auto-reconnect with exponential backoff
+ * - Sequence tracking for replay on reconnect
+ * - RPC request/response with timeout
+ * - Credential persistence
+ */
+export class SessionClient {
     private ws: WebSocket | null = null;
     private messageHandlers = new Set<MessageHandler>();
     private statusHandlers = new Set<StatusHandler>();
     private rpcPending = new Map<string, (res: RpcResponse) => void>();
     private currentStatus: SocketStatus = 'disconnected';
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    private reconnectDelay = 1_000;
+    private reconnectDelay: number;
     private closed = false;
     private lastErrorReason: string | null = null;
 
@@ -71,6 +52,26 @@ class DirectSocket {
     private webappPublicKey = '';
     private storedCredentials: StoredCredentials | null = null;
     private lastSeq = -1;
+
+    private readonly storage: CredentialStorage;
+    private readonly createWebSocket: WebSocketFactory;
+    private readonly rpcTimeoutMs: number;
+    private readonly maxReconnectDelayMs: number;
+    private readonly initialReconnectDelayMs: number;
+    private readonly getPageProtocol: () => string;
+
+    constructor(options: SessionClientOptions = {}) {
+        this.storage = options.storage ?? createBrowserStorage();
+        this.createWebSocket = options.createWebSocket ?? ((url) => new WebSocket(url));
+        this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULTS.rpcTimeoutMs;
+        this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULTS.maxReconnectDelayMs;
+        this.initialReconnectDelayMs = options.initialReconnectDelayMs ?? DEFAULTS.initialReconnectDelayMs;
+        this.reconnectDelay = this.initialReconnectDelayMs;
+        this.getPageProtocol = options.pageProtocol ?? (() =>
+            typeof location !== 'undefined' ? location.protocol : 'http:');
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
 
     connectFirstTime(qrPayload: DirectQRPayload, webappPublicKey: string): void {
         this.closed = false;
@@ -113,7 +114,7 @@ class DirectSocket {
             const timer = setTimeout(() => {
                 this.rpcPending.delete(id);
                 reject(new Error(`RPC timeout: ${method}`));
-            }, RPC_TIMEOUT);
+            }, this.rpcTimeoutMs);
             this.rpcPending.set(id, (res) => {
                 clearTimeout(timer);
                 resolve(res);
@@ -124,36 +125,75 @@ class DirectSocket {
 
     onMessage(handler: MessageHandler): () => void {
         this.messageHandlers.add(handler);
-        return () => this.messageHandlers.delete(handler);
+        return () => { this.messageHandlers.delete(handler); };
     }
 
     onStatusChange(handler: StatusHandler): () => void {
         this.statusHandlers.add(handler);
         handler(this.currentStatus);
-        return () => this.statusHandlers.delete(handler);
+        return () => { this.statusHandlers.delete(handler); };
     }
 
     getStatus(): SocketStatus { return this.currentStatus; }
     getLastError(): string | null { return this.lastErrorReason; }
+    getLastSeq(): number { return this.lastSeq; }
+
+    // ── Credential helpers (proxied to injected storage) ──────────────────────
+
+    loadStoredCredentials(): StoredCredentials | null {
+        return this.storage.loadCredentials();
+    }
+
+    clearCredentials(): void {
+        this.storage.clearCredentials();
+    }
+
+    /**
+     * Persist externally-provided credentials (e.g. imported from another
+     * browser). The caller is responsible for disconnecting any active
+     * session first.
+     */
+    importCredentials(creds: StoredCredentials): void {
+        this.storage.saveCredentials(creds);
+    }
+
+    getOrCreateWebappKey(): string {
+        return this.storage.getOrCreateWebappKey();
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────────
 
     private open(): void {
         if (this.ws) return;
         this.setStatus('connecting');
         try {
-            const ws = new WebSocket(this.endpoint);
+            const ws = this.createWebSocket(this.endpoint);
             this.ws = ws;
 
             ws.onopen = () => {
                 this.resetDelay();
                 if (this.qrPayload) {
-                    this.send({ type: 'hello', nonce: this.qrPayload.nonce, webappPublicKey: this.webappPublicKey });
+                    this.send({
+                        type: 'hello',
+                        nonce: this.qrPayload.nonce,
+                        webappPublicKey: this.webappPublicKey,
+                    });
                 } else if (this.storedCredentials) {
-                    this.send({ type: 'hello', sessionCredential: this.storedCredentials.sessionCredential, webappPublicKey: this.webappPublicKey, lastSeq: this.lastSeq });
+                    this.send({
+                        type: 'hello',
+                        sessionCredential: this.storedCredentials.sessionCredential,
+                        webappPublicKey: this.webappPublicKey,
+                        lastSeq: this.lastSeq,
+                    });
                 }
             };
 
-            ws.onmessage = (event) => {
-                try { this.handleMessage(JSON.parse(event.data as string)); } catch { /* ignore */ }
+            ws.onmessage = (event: MessageEvent) => {
+                try {
+                    this.handleMessage(JSON.parse(event.data as string));
+                } catch (e) {
+                    console.error('[SessionClient] failed to parse message', e, event.data);
+                }
             };
 
             ws.onclose = () => {
@@ -165,7 +205,7 @@ class DirectSocket {
             };
 
             ws.onerror = () => {
-                const isMixed = location.protocol === 'https:' && this.endpoint.startsWith('ws://');
+                const isMixed = this.getPageProtocol() === 'https:' && this.endpoint.startsWith('ws://');
                 this.lastErrorReason = isMixed
                     ? 'Mixed content: page is HTTPS but endpoint is ws://. Use wss:// or open over HTTP.'
                     : 'WebSocket connection failed — check that the CLI server is reachable.';
@@ -197,7 +237,7 @@ class DirectSocket {
                     this.storedCredentials = creds;
                     this.lastSeq = creds.lastSeq;
                     this.qrPayload = null;
-                    saveCredentials(creds);
+                    this.storage.saveCredentials(creds);
                 }
                 this.setStatus('connected');
                 break;
@@ -208,7 +248,7 @@ class DirectSocket {
                     this.lastSeq = seq;
                     if (this.storedCredentials) {
                         this.storedCredentials = { ...this.storedCredentials, lastSeq: seq };
-                        saveCredentials(this.storedCredentials);
+                        this.storage.saveCredentials(this.storedCredentials);
                     }
                 }
                 this.messageHandlers.forEach(h => h(m['payload'], seq));
@@ -219,7 +259,10 @@ class DirectSocket {
                 break;
             case 'rpc-response': {
                 const id = typeof m['id'] === 'string' ? m['id'] : '';
-                this.rpcPending.get(id)?.({ result: m['result'], error: typeof m['error'] === 'string' ? m['error'] : undefined });
+                this.rpcPending.get(id)?.({
+                    result: m['result'],
+                    error: typeof m['error'] === 'string' ? m['error'] : undefined,
+                });
                 this.rpcPending.delete(id);
                 break;
             }
@@ -244,14 +287,19 @@ class DirectSocket {
             this.reconnectTimer = null;
             if (!this.closed) this.open();
         }, this.reconnectDelay);
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelayMs);
     }
 
     private clearTimer(): void {
-        if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
     }
 
-    private resetDelay(): void { this.reconnectDelay = 1_000; }
+    private resetDelay(): void {
+        this.reconnectDelay = this.initialReconnectDelayMs;
+    }
 
     private setStatus(status: SocketStatus): void {
         if (this.currentStatus !== status) {
@@ -261,4 +309,5 @@ class DirectSocket {
     }
 }
 
-export const directSocket = new DirectSocket();
+/** Default singleton used by the app. */
+export const sessionClient = new SessionClient();

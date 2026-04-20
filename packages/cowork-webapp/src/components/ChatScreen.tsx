@@ -1,80 +1,45 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { directSocket, type SocketStatus, clearCredentials } from '../directSocket';
+import { sessionClient } from '../session';
+import type { ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
+import { eventToItems, mergeItems, uid } from '../session/events';
 import { MarkdownMessage } from './MarkdownMessage';
-
-// ── Event types ───────────────────────────────────────────────────────────────
-
-interface TextPart { type: 'text'; text: string; }
-interface ToolUsePart { type: 'tool_use'; id: string; name: string; input: unknown; }
-interface ToolResultPart { type: 'tool_result'; tool_use_id: string; content: string | unknown[]; }
-type ContentPart = TextPart | ToolUsePart | ToolResultPart;
-
-interface AssistantEvent { type: 'assistant'; message: { role: 'assistant'; content: ContentPart[] }; }
-interface UserEvent { type: 'user'; message: { role: 'user'; content: string | ContentPart[] }; }
-interface ResultEvent { type: 'result'; subtype: 'success' | 'error'; result: string; }
-interface SystemEvent { type: 'system'; subtype: string; session_id?: string; }
-interface PermissionEvent { type: 'permission-request'; permissionId: string; toolName: string; input: unknown; }
-type ClaudeEvent = AssistantEvent | UserEvent | ResultEvent | SystemEvent | PermissionEvent | { type: string };
-
-// ── Display items ─────────────────────────────────────────────────────────────
-
-type Item =
-    | { kind: 'user'; text: string; id: string }
-    | { kind: 'assistant'; text: string; id: string }
-    | { kind: 'tools'; names: string[]; id: string }
-    | { kind: 'result'; text: string; success: boolean; id: string }
-    | { kind: 'status'; text: string; id: string };
-
-let counter = 0;
-const uid = () => String(++counter);
-
-function eventToItems(event: ClaudeEvent): Item[] {
-    switch (event.type) {
-        case 'user': {
-            const e = event as UserEvent;
-            const text = typeof e.message.content === 'string'
-                ? e.message.content
-                : (e.message.content.find((p): p is TextPart => p.type === 'text')?.text ?? '');
-            return text ? [{ kind: 'user', text, id: uid() }] : [];
-        }
-        case 'assistant': {
-            const e = event as AssistantEvent;
-            const items: Item[] = [];
-            const text = e.message.content.filter((p): p is TextPart => p.type === 'text').map(p => p.text).join('');
-            if (text) items.push({ kind: 'assistant', text, id: uid() });
-            const tools = e.message.content.filter((p): p is ToolUsePart => p.type === 'tool_use').map(p => p.name);
-            if (tools.length) items.push({ kind: 'tools', names: tools, id: uid() });
-            return items;
-        }
-        case 'result': {
-            const e = event as ResultEvent;
-            return e.subtype === 'error' ? [{ kind: 'result', text: e.result || 'error', success: false, id: uid() }] : [];
-        }
-        case 'system': {
-            const e = event as SystemEvent;
-            return e.session_id ? [{ kind: 'status', text: `Session ${e.session_id.slice(0, 8)}…`, id: uid() }] : [];
-        }
-        default: return [];
-    }
-}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-const ToolsItem = memo(function ToolsItem({ names }: { names: string[] }) {
+function formatToolInput(input: unknown): string {
+    if (input == null) return '';
+    if (typeof input === 'string') return input;
+    try {
+        return JSON.stringify(input, null, 2);
+    } catch {
+        return String(input);
+    }
+}
+
+const ToolsItem = memo(function ToolsItem({ calls }: { calls: ToolCall[] }) {
     const [open, setOpen] = useState(false);
-    const label = names.length === 1 ? names[0] : `${names.length} tool calls`;
+    const label = calls.length === 1 ? calls[0].name : `${calls.length} tool calls`;
     return (
-        <button className="tools-group" onClick={() => setOpen(o => !o)}>
-            <span className="tools-icon">⚙</span>
-            <span className="tools-label">{label}</span>
-            <span className="tools-chevron">{open ? '▾' : '▸'}</span>
-            {open && names.length > 1 && (
+        <div className="tools-group">
+            <button className="tools-header" onClick={() => setOpen((o) => !o)}>
+                <span className="tools-icon">⚙</span>
+                <span className="tools-label">{label}</span>
+                <span className="tools-chevron">{open ? '▾' : '▸'}</span>
+            </button>
+            {open && (
                 <ul className="tools-list">
-                    {names.map((n, i) => <li key={i}>{n}</li>)}
+                    {calls.map((call) => (
+                        <li key={call.toolUseId} className="tools-item">
+                            <div className="tools-item-name">{call.name}</div>
+                            {formatToolInput(call.input) && (
+                                <pre className="tools-item-input">{formatToolInput(call.input)}</pre>
+                            )}
+                        </li>
+                    ))}
                 </ul>
             )}
-        </button>
+        </div>
     );
 });
 
@@ -85,7 +50,7 @@ const MessageItem = memo(function MessageItem({ item }: { item: Item }) {
         case 'assistant':
             return <div className="msg-assistant"><MarkdownMessage text={item.text} /></div>;
         case 'tools':
-            return <div className="msg-tools"><ToolsItem names={item.names} /></div>;
+            return <div className="msg-tools"><ToolsItem calls={item.calls} /></div>;
         case 'result':
             return (
                 <div className={`msg-result ${item.success ? 'success' : 'error'}`}>
@@ -109,7 +74,7 @@ const TypingDots = memo(function TypingDots() {
 
 export function ChatScreen() {
     const navigate = useNavigate();
-    const [status, setStatus] = useState<SocketStatus>(directSocket.getStatus());
+    const [status, setStatus] = useState<SocketStatus>(sessionClient.getStatus());
     const [items, setItems] = useState<Item[]>([]);
     const [input, setInput] = useState('');
     const [thinking, setThinking] = useState(false);
@@ -124,8 +89,8 @@ export function ChatScreen() {
     const logsBottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const unsubStatus = directSocket.onStatusChange(setStatus);
-        const unsubMsg = directSocket.onMessage((payload) => {
+        const unsubStatus = sessionClient.onStatusChange(setStatus);
+        const unsubMsg = sessionClient.onMessage((payload) => {
             if ((payload as PermissionEvent).type === 'permission-request') {
                 setPermission(payload as PermissionEvent);
                 return;
@@ -134,25 +99,11 @@ export function ChatScreen() {
             if (event.type === 'result') setThinking(false);
             const newItems = eventToItems(event);
             if (!newItems.length) return;
-            setItems(prev => {
-                const merged = [...prev];
-                for (const item of newItems) {
-                    if (item.kind === 'tools') {
-                        const last = merged[merged.length - 1];
-                        if (last?.kind === 'tools') { merged[merged.length - 1] = { ...last, names: [...last.names, ...item.names] }; continue; }
-                    }
-                    if (item.kind === 'user') {
-                        const last = merged[merged.length - 1];
-                        if (last?.kind === 'user' && last.text === item.text) continue;
-                    }
-                    merged.push(item);
-                }
-                return merged;
-            });
+            setItems(prev => mergeItems(prev, newItems));
         });
 
-        if (directSocket.getStatus() === 'connected') {
-            directSocket.rpc(uid(), 'replay', { fromSeq: -1 }).catch(() => {});
+        if (sessionClient.getStatus() === 'connected') {
+            sessionClient.rpc(uid(), 'replay', { fromSeq: -1 }).catch(() => {});
         }
 
         return () => { unsubStatus(); unsubMsg(); };
@@ -165,7 +116,7 @@ export function ChatScreen() {
     const handleSend = useCallback(() => {
         const text = input.trim();
         if (!text || status !== 'connected') return;
-        directSocket.sendInput(text);
+        sessionClient.sendInput(text);
         setInput('');
         setThinking(true);
         setItems(prev => [...prev, { kind: 'user', text, id: uid() }]);
@@ -181,7 +132,7 @@ export function ChatScreen() {
 
     const handlePermission = useCallback((approved: boolean) => {
         if (!permission) return;
-        directSocket.rpc(uid(), 'permissionResponse', { permissionId: permission.permissionId, approved }).catch(() => {});
+        sessionClient.rpc(uid(), 'permissionResponse', { permissionId: permission.permissionId, approved }).catch(() => {});
         setPermission(null);
     }, [permission]);
 
@@ -190,8 +141,8 @@ export function ChatScreen() {
     }, [navigate]);
 
     const handleDisconnect = useCallback(() => {
-        directSocket.disconnect();
-        clearCredentials();
+        sessionClient.disconnect();
+        sessionClient.clearCredentials();
         navigate('/');
     }, [navigate]);
 
@@ -199,7 +150,7 @@ export function ChatScreen() {
         setLogsOpen(true);
         setLogsLoading(true);
         try {
-            const res = await directSocket.rpc(uid(), 'getLogs', { lines: 300 });
+            const res = await sessionClient.rpc(uid(), 'getLogs', { lines: 300 });
             const r = res.result as { lines: string[]; logPath: string } | undefined;
             setLogLines(r?.lines ?? [res.error ?? 'Error fetching logs']);
             setLogPath(r?.logPath ?? '');
@@ -255,8 +206,8 @@ export function ChatScreen() {
                 <div className="chat-status">
                     <span className={`status-dot ${statusDot}`} />
                     <span className="status-label">{statusLabel}</span>
-                    {status === 'error' && directSocket.getLastError() && (
-                        <span className="status-error-hint">{directSocket.getLastError()}</span>
+                    {status === 'error' && sessionClient.getLastError() && (
+                        <span className="status-error-hint">{sessionClient.getLastError()}</span>
                     )}
                 </div>
                 <div className="chat-header-actions">
