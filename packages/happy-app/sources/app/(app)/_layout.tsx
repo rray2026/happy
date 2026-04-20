@@ -2,9 +2,6 @@ import { Stack } from 'expo-router';
 import 'react-native-reanimated';
 import * as React from 'react';
 import { Typography } from '@/constants/Typography';
-import { createHeader } from '@/components/navigation/Header';
-import { Platform } from 'react-native';
-import { isRunningOnMac } from '@/utils/platform';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 
@@ -13,15 +10,12 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
-    // Use custom header on Android and Mac Catalyst, native header on iOS (non-Catalyst)
-    const shouldUseCustomHeader = Platform.OS === 'android' || isRunningOnMac() || Platform.OS === 'web';
     const { theme } = useUnistyles();
 
     return (
         <Stack
             initialRouteName='index'
             screenOptions={{
-                header: shouldUseCustomHeader ? createHeader : undefined,
                 headerBackTitle: t('common.back'),
                 headerShadowVisible: false,
                 contentStyle: {
@@ -35,187 +29,11 @@ export default function RootLayout() {
                     color: theme.colors.header.tint,
                     ...Typography.default('semiBold'),
                 },
-
             }}
         >
             <Stack.Screen
                 name="index"
-                options={{
-                    headerShown: false,
-                    headerTitle: ''
-                }}
-            />
-            <Stack.Screen
-                name="settings/index"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('settings.title'),
-                    headerBackTitle: t('common.home')
-                }}
-            />
-            <Stack.Screen
-                name="session/[id]"
-                options={{
-                    headerShown: false
-                }}
-            />
-            <Stack.Screen
-                name="session/[id]/message/[messageId]"
-                options={{
-                    headerShown: true,
-                    headerBackTitle: t('common.back'),
-                    headerTitle: t('common.message')
-                }}
-            />
-            <Stack.Screen
-                name="session/[id]/info"
-                options={{
-                    headerShown: true,
-                    headerTitle: '',
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="session/[id]/files"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('common.files'),
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="session/[id]/file"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('common.fileViewer'),
-                    headerBackTitle: t('common.files'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/error-logs"
-                options={{
-                    headerTitle: t('settings.errorLogs'),
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/appearance"
-                options={{
-                    headerTitle: t('settings.appearance'),
-                }}
-            />
-            <Stack.Screen
-                name="terminal/connect"
-                options={{
-                    headerTitle: t('navigation.connectTerminal'),
-                }}
-            />
-            <Stack.Screen
-                name="terminal/index"
-                options={{
-                    headerTitle: t('navigation.connectTerminal'),
-                }}
-            />
-            <Stack.Screen
-                name="restore/index"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('navigation.linkNewDevice'),
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="text-selection"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('textSelection.title'),
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="user/[id]"
-                options={{
-                    headerShown: true,
-                    headerTitle: '',
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="dev/index"
-                options={{
-                    headerTitle: 'Developer Tools',
-                }}
-            />
-            <Stack.Screen
-                name="dev/logs"
-                options={{
-                    headerTitle: 'Logs',
-                    headerBackTitle: 'Dev',
-                }}
-            />
-
-            <Stack.Screen
-                name="dev/list-demo"
-                options={{
-                    headerTitle: 'List Components Demo',
-                }}
-            />
-            <Stack.Screen
-                name="dev/typography"
-                options={{
-                    headerTitle: 'Typography',
-                }}
-            />
-            <Stack.Screen
-                name="dev/colors"
-                options={{
-                    headerTitle: 'Colors',
-                }}
-            />
-            <Stack.Screen
-                name="dev/tools2"
-                options={{
-                    headerTitle: 'Tool Views Demo',
-                }}
-            />
-            <Stack.Screen
-                name="dev/masked-progress"
-                options={{
-                    headerTitle: 'Masked Progress',
-                }}
-            />
-            <Stack.Screen
-                name="dev/shimmer-demo"
-                options={{
-                    headerTitle: 'Shimmer View Demo',
-                }}
-            />
-            <Stack.Screen
-                name="dev/multi-text-input"
-                options={{
-                    headerTitle: 'Multi Text Input',
-                }}
-            />
-            <Stack.Screen
-                name="dev/session-composer"
-                options={{
-                    headerTitle: 'Session Composer',
-                }}
-            />
-            <Stack.Screen
-                name="session/recent"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('sessionHistory.title'),
-                    headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="new/index"
-                options={{
-                    headerTitle: t('newSession.title'),
-                    headerBackTitle: t('common.back'),
-                }}
+                options={{ headerShown: false }}
             />
             <Stack.Screen
                 name="direct/index"
@@ -224,6 +42,46 @@ export default function RootLayout() {
                     headerTitle: 'Direct Connect',
                     headerBackTitle: t('common.back'),
                 }}
+            />
+            <Stack.Screen
+                name="terminal/connect"
+                options={{ headerTitle: t('navigation.connectTerminal') }}
+            />
+            <Stack.Screen
+                name="terminal/index"
+                options={{ headerTitle: t('navigation.connectTerminal') }}
+            />
+            <Stack.Screen
+                name="dev/index"
+                options={{ headerTitle: 'Developer Tools' }}
+            />
+            <Stack.Screen
+                name="dev/logs"
+                options={{ headerTitle: 'Logs', headerBackTitle: 'Dev' }}
+            />
+            <Stack.Screen
+                name="dev/list-demo"
+                options={{ headerTitle: 'List Components Demo' }}
+            />
+            <Stack.Screen
+                name="dev/typography"
+                options={{ headerTitle: 'Typography' }}
+            />
+            <Stack.Screen
+                name="dev/colors"
+                options={{ headerTitle: 'Colors' }}
+            />
+            <Stack.Screen
+                name="dev/shimmer-demo"
+                options={{ headerTitle: 'Shimmer View Demo' }}
+            />
+            <Stack.Screen
+                name="dev/multi-text-input"
+                options={{ headerTitle: 'Multi Text Input' }}
+            />
+            <Stack.Screen
+                name="dev/session-composer"
+                options={{ headerTitle: 'Session Composer' }}
             />
         </Stack>
     );

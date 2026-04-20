@@ -22,7 +22,7 @@ import { Purchases, customerInfoToPurchases } from "./purchases";
 import { Profile } from "./profile";
 import { UserProfile, RelationshipUpdatedEvent } from "./friendTypes";
 import { loadSettings, loadLocalSettings, saveLocalSettings, saveSettings, loadPurchases, savePurchases, loadProfile, saveProfile, loadSessionDrafts, saveSessionDrafts, loadSessionPermissionModes, saveSessionPermissionModes } from "./persistence";
-import type { PermissionModeKey } from '@/components/PermissionModeSelector';
+import type { PermissionModeKey } from '@/components/modelModeOptions';
 import type { CustomerInfo } from './revenueCat/types';
 import React from "react";
 import { sync } from "./sync";
