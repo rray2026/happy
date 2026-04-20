@@ -57,7 +57,7 @@ export class SessionEncryption {
         // Batch decrypt uncached messages
         if (toDecrypt.length > 0) {
             const encrypted = toDecrypt.map(item =>
-                decodeBase64(item.message.content.c, 'base64')
+                decodeBase64(item.message.content.c!, 'base64')
             );
             
             const decrypted = await this.encryptor.decrypt(encrypted);
