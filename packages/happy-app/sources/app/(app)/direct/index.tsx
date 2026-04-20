@@ -9,6 +9,7 @@ import {
     TouchableOpacity,
     Modal,
     ActivityIndicator,
+    Animated,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native-unistyles';
@@ -120,13 +121,9 @@ function eventToItems(event: ClaudeEvent): DisplayItem[] {
             const ae = event as ClaudeAssistantEvent;
             const items: DisplayItem[] = [];
             const text = extractAssistantText(ae);
-            if (text) {
-                items.push({ kind: 'assistant', text, id: nextId() });
-            }
+            if (text) items.push({ kind: 'assistant', text, id: nextId() });
             const toolNames = extractToolNames(ae);
-            if (toolNames.length > 0) {
-                items.push({ kind: 'tool-group', names: toolNames, id: nextId() });
-            }
+            if (toolNames.length > 0) items.push({ kind: 'tool-group', names: toolNames, id: nextId() });
             return items;
         }
         case 'result': {
@@ -148,7 +145,36 @@ function eventToItems(event: ClaudeEvent): DisplayItem[] {
     }
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────────
+// ── Typing indicator ──────────────────────────────────────────────────────────
+
+const TypingIndicator = memo(function TypingIndicator() {
+    const dots = [useRef(new Animated.Value(0.3)).current, useRef(new Animated.Value(0.3)).current, useRef(new Animated.Value(0.3)).current];
+
+    useEffect(() => {
+        const animations = dots.map((dot, i) =>
+            Animated.loop(
+                Animated.sequence([
+                    Animated.delay(i * 150),
+                    Animated.timing(dot, { toValue: 1, duration: 300, useNativeDriver: true }),
+                    Animated.timing(dot, { toValue: 0.3, duration: 300, useNativeDriver: true }),
+                    Animated.delay((dots.length - 1 - i) * 150),
+                ])
+            )
+        );
+        animations.forEach((a) => a.start());
+        return () => animations.forEach((a) => a.stop());
+    }, []);
+
+    return (
+        <View style={styles.typingRow}>
+            {dots.map((dot, i) => (
+                <Animated.View key={i} style={[styles.typingDot, { opacity: dot }]} />
+            ))}
+        </View>
+    );
+});
+
+// ── Status helpers ────────────────────────────────────────────────────────────
 
 function statusColor(status: DirectSocketStatus): string {
     switch (status) {
@@ -175,6 +201,7 @@ export default memo(function DirectSessionScreen() {
     const [status, setStatus] = useState<DirectSocketStatus>(directSocket.getStatus());
     const [items, setItems] = useState<DisplayItem[]>([]);
     const [inputText, setInputText] = useState('');
+    const [isThinking, setIsThinking] = useState(false);
     const scrollRef = useRef<ScrollView>(null);
     const [logsVisible, setLogsVisible] = useState(false);
     const [logLines, setLogLines] = useState<string[]>([]);
@@ -183,7 +210,6 @@ export default memo(function DirectSessionScreen() {
     const logsScrollRef = useRef<ScrollView>(null);
     const [permissionRequest, setPermissionRequest] = useState<PermissionRequestEvent | null>(null);
 
-    // Subscribe to socket status and messages
     useEffect(() => {
         const unsubStatus = directSocket.onStatusChange(setStatus);
         const unsubMsg = directSocket.onMessage((payload) => {
@@ -191,7 +217,14 @@ export default memo(function DirectSessionScreen() {
                 setPermissionRequest(payload as PermissionRequestEvent);
                 return;
             }
-            const newItems = eventToItems(payload as ClaudeEvent);
+            const event = payload as ClaudeEvent;
+
+            // Result event marks end of a turn
+            if (event.type === 'result') {
+                setIsThinking(false);
+            }
+
+            const newItems = eventToItems(event);
             if (newItems.length > 0) {
                 setItems((prev) => {
                     const merged = [...prev];
@@ -203,7 +236,6 @@ export default memo(function DirectSessionScreen() {
                                 continue;
                             }
                         }
-                        // Skip server echo of a user message already shown locally
                         if (item.kind === 'user') {
                             const last = merged[merged.length - 1];
                             if (last?.kind === 'user' && last.text === item.text) continue;
@@ -219,33 +251,28 @@ export default memo(function DirectSessionScreen() {
         if (currentStatus === 'disconnected') {
             const creds = TokenStorage.getDirectCredentials();
             if (creds) {
-                // lastSeq: -1 → CLI sends full stored history on reconnect
                 directSocket.connectFromStored({ ...creds, lastSeq: -1 });
             }
         } else if (currentStatus === 'connected') {
-            // Already connected (e.g. navigated back to /direct) — request history replay
             const id = Math.random().toString(36).slice(2);
             directSocket.rpc(id, 'replay', { fromSeq: -1 }).catch(() => {});
         }
 
-        return () => {
-            unsubStatus();
-            unsubMsg();
-        };
+        return () => { unsubStatus(); unsubMsg(); };
     }, []);
 
-    // Auto-scroll to bottom on new items
     useEffect(() => {
-        if (items.length > 0) {
+        if (items.length > 0 || isThinking) {
             setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
         }
-    }, [items]);
+    }, [items, isThinking]);
 
     const handleSend = useCallback(() => {
         const text = inputText.trim();
         if (!text || status !== 'connected') return;
         directSocket.sendInput(text);
         setInputText('');
+        setIsThinking(true);
         setItems((prev) => [...prev, { kind: 'user', text, id: nextId() }]);
     }, [inputText, status]);
 
@@ -291,33 +318,20 @@ export default memo(function DirectSessionScreen() {
             style={styles.flex}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-            {/* Permission request modal */}
-            <Modal
-                visible={permissionRequest !== null}
-                animationType="fade"
-                transparent
-                onRequestClose={() => handlePermission(false)}
-            >
+            {/* Permission modal */}
+            <Modal visible={permissionRequest !== null} animationType="fade" transparent onRequestClose={() => handlePermission(false)}>
                 <View style={styles.permOverlay}>
                     <View style={styles.permCard}>
                         <Text style={styles.permTitle}>Permission Request</Text>
                         <Text style={styles.permTool}>{permissionRequest?.toolName}</Text>
                         <ScrollView style={styles.permInputScroll}>
-                            <Text style={styles.permInput}>
-                                {JSON.stringify(permissionRequest?.input, null, 2)}
-                            </Text>
+                            <Text style={styles.permInput}>{JSON.stringify(permissionRequest?.input, null, 2)}</Text>
                         </ScrollView>
                         <View style={styles.permActions}>
-                            <TouchableOpacity
-                                onPress={() => handlePermission(false)}
-                                style={[styles.permBtn, styles.permDeny]}
-                            >
+                            <TouchableOpacity onPress={() => handlePermission(false)} style={[styles.permBtn, styles.permDeny]}>
                                 <Text style={[styles.permBtnText, { color: '#FF3B30' }]}>Deny</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={() => handlePermission(true)}
-                                style={[styles.permBtn, styles.permApprove]}
-                            >
+                            <TouchableOpacity onPress={() => handlePermission(true)} style={[styles.permBtn, styles.permApprove]}>
                                 <Text style={[styles.permBtnText, { color: '#34C759' }]}>Approve</Text>
                             </TouchableOpacity>
                         </View>
@@ -338,22 +352,13 @@ export default memo(function DirectSessionScreen() {
                         </TouchableOpacity>
                     </View>
                     {logsLoading ? (
-                        <View style={styles.logsCenter}>
-                            <ActivityIndicator size="large" />
-                        </View>
+                        <View style={styles.logsCenter}><ActivityIndicator size="large" /></View>
                     ) : (
-                        <ScrollView
-                            ref={logsScrollRef}
-                            style={styles.logsScroll}
-                            contentContainerStyle={styles.logsContent}
-                        >
-                            {logLines.length === 0 ? (
-                                <Text style={styles.logsEmpty}>No log entries found.</Text>
-                            ) : (
-                                logLines.map((line, i) => (
-                                    <Text key={i} style={styles.logsLine}>{line}</Text>
-                                ))
-                            )}
+                        <ScrollView ref={logsScrollRef} style={styles.logsScroll} contentContainerStyle={styles.logsContent}>
+                            {logLines.length === 0
+                                ? <Text style={styles.logsEmpty}>No log entries found.</Text>
+                                : logLines.map((line, i) => <Text key={i} style={styles.logsLine}>{line}</Text>)
+                            }
                         </ScrollView>
                     )}
                 </View>
@@ -367,14 +372,12 @@ export default memo(function DirectSessionScreen() {
                 </View>
                 <View style={styles.headerActions}>
                     {status === 'connected' && (
-                        <TouchableOpacity onPress={handleOpenLogs} style={styles.logsBtn}>
-                            <Ionicons name="document-text-outline" size={18} color="#8E8E93" />
-                            <Text style={styles.logsBtnText}>Logs</Text>
+                        <TouchableOpacity onPress={handleOpenLogs} style={styles.iconBtn}>
+                            <Ionicons name="document-text-outline" size={20} color="#8E8E93" />
                         </TouchableOpacity>
                     )}
-                    <TouchableOpacity onPress={handleDisconnect} style={styles.disconnectBtn}>
-                        <Ionicons name="close-circle-outline" size={22} color="#FF3B30" />
-                        <Text style={styles.disconnectText}>Disconnect</Text>
+                    <TouchableOpacity onPress={handleDisconnect} style={styles.iconBtn}>
+                        <Ionicons name="close-circle-outline" size={20} color="#FF3B30" />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -386,58 +389,57 @@ export default memo(function DirectSessionScreen() {
                 contentContainerStyle={styles.messageContent}
                 keyboardShouldPersistTaps="handled"
             >
-                {items.length === 0 && (
+                {items.length === 0 && !isThinking && (
                     <Text style={styles.emptyText}>
-                        {status === 'connected'
-                            ? 'Connected. Type a message below to start.'
-                            : 'Waiting for connection…'}
+                        {status === 'connected' ? 'How can I help you today?' : 'Waiting for connection…'}
                     </Text>
                 )}
                 {items.map((item) => <MessageItem key={item.id} item={item} />)}
+                {isThinking && <TypingIndicator />}
             </ScrollView>
 
             {/* Input bar */}
             <View style={styles.inputBar}>
-                <TextInput
-                    style={styles.textInput}
-                    value={inputText}
-                    onChangeText={setInputText}
-                    placeholder="Message to CLI agent…"
-                    placeholderTextColor="#8E8E93"
-                    multiline
-                    maxLength={4000}
-                    returnKeyType="send"
-                    onSubmitEditing={handleSend}
-                    editable={status === 'connected'}
-                />
-                <TouchableOpacity
-                    onPress={handleSend}
-                    disabled={!inputText.trim() || status !== 'connected'}
-                    style={[
-                        styles.sendBtn,
-                        (!inputText.trim() || status !== 'connected') && styles.sendBtnDisabled,
-                    ]}
-                >
-                    <Ionicons name="send" size={18} color="#FFF" />
-                </TouchableOpacity>
+                <View style={styles.inputContainer}>
+                    <TextInput
+                        style={styles.textInput}
+                        value={inputText}
+                        onChangeText={setInputText}
+                        placeholder="Message…"
+                        placeholderTextColor="#8E8E93"
+                        multiline
+                        maxLength={4000}
+                        returnKeyType="default"
+                        editable={status === 'connected' && !isThinking}
+                    />
+                    <TouchableOpacity
+                        onPress={handleSend}
+                        disabled={!inputText.trim() || status !== 'connected' || isThinking}
+                        style={[styles.sendBtn, (!inputText.trim() || status !== 'connected' || isThinking) && styles.sendBtnDisabled]}
+                    >
+                        <Ionicons name="arrow-up" size={18} color="#FFF" />
+                    </TouchableOpacity>
+                </View>
             </View>
         </KeyboardAvoidingView>
     );
 });
 
-// ── MessageItem ────────────────────────────────────────────────────────────────
+// ── MessageItem ───────────────────────────────────────────────────────────────
 
 const MessageItem = memo(function MessageItem({ item }: { item: DisplayItem }) {
     switch (item.kind) {
         case 'user':
             return (
-                <View style={styles.userBubble}>
-                    <Text style={styles.userText}>{item.text}</Text>
+                <View style={styles.userRow}>
+                    <View style={styles.userBubble}>
+                        <Text style={styles.userText}>{item.text}</Text>
+                    </View>
                 </View>
             );
         case 'assistant':
             return (
-                <View style={styles.assistantBubble}>
+                <View style={styles.assistantRow}>
                     <MarkdownView markdown={item.text} />
                 </View>
             );
@@ -461,7 +463,7 @@ const MessageItem = memo(function MessageItem({ item }: { item: DisplayItem }) {
     }
 });
 
-// ── ToolGroupItem ──────────────────────────────────────────────────────────
+// ── ToolGroupItem ─────────────────────────────────────────────────────────────
 
 const ToolGroupItem = memo(function ToolGroupItem({ names }: { names: string[] }) {
     const [collapsed, setCollapsed] = useState(true);
@@ -489,13 +491,15 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         backgroundColor: theme.colors.surface,
     },
+
+    // Header
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingHorizontal: 16,
         paddingVertical: 10,
-        borderBottomWidth: 1,
+        borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.divider,
         backgroundColor: theme.colors.header.background,
     },
@@ -517,117 +521,50 @@ const styles = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-    },
-    logsBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
         gap: 4,
     },
-    logsBtnText: {
-        fontSize: 14,
-        color: '#8E8E93',
+    iconBtn: {
+        padding: 6,
     },
-    disconnectBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    disconnectText: {
-        fontSize: 14,
-        color: '#FF3B30',
-    },
-    logsModal: {
-        flex: 1,
-        backgroundColor: '#0D0D0D',
-    },
-    logsHeader: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        paddingHorizontal: 16,
-        paddingTop: 56,
-        paddingBottom: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#2C2C2E',
-    },
-    logsTitle: {
-        fontSize: 17,
-        fontWeight: '600',
-        color: '#FFFFFF',
-    },
-    logsPath: {
-        fontSize: 11,
-        color: '#636366',
-        fontFamily: 'IBMPlexMono-Regular',
-        marginTop: 2,
-    },
-    logsClose: {
-        padding: 4,
-    },
-    logsCenter: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    logsScroll: {
-        flex: 1,
-    },
-    logsContent: {
-        padding: 12,
-        gap: 2,
-    },
-    logsEmpty: {
-        color: '#636366',
-        fontSize: 13,
-        textAlign: 'center',
-        marginTop: 40,
-    },
-    logsLine: {
-        fontSize: 11,
-        color: '#E5E5EA',
-        fontFamily: 'IBMPlexMono-Regular',
-        lineHeight: 16,
-    },
+
+    // Messages
     messageList: {
         flex: 1,
     },
     messageContent: {
-        padding: 16,
-        gap: 8,
+        paddingHorizontal: 16,
+        paddingTop: 20,
+        paddingBottom: 8,
+        gap: 16,
     },
     emptyText: {
         color: theme.colors.textSecondary,
-        fontSize: 14,
+        fontSize: 16,
         textAlign: 'center',
-        marginTop: 40,
+        marginTop: 60,
+        fontWeight: '500',
+    },
+    userRow: {
+        alignItems: 'flex-end',
     },
     userBubble: {
-        alignSelf: 'flex-end',
         backgroundColor: theme.colors.button.primary.background,
-        borderRadius: 16,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
+        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
         maxWidth: '80%',
     },
     userText: {
         color: theme.colors.button.primary.tint,
-        fontSize: 15,
-    },
-    assistantBubble: {
-        alignSelf: 'flex-start',
-        backgroundColor: theme.colors.input.background,
-        borderRadius: 16,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        maxWidth: '90%',
-    },
-    assistantText: {
-        color: theme.colors.text,
-        fontSize: 15,
+        fontSize: 16,
         lineHeight: 22,
+    },
+    assistantRow: {
+        alignSelf: 'stretch',
     },
     toolGroup: {
         paddingLeft: 4,
+        paddingVertical: 2,
     },
     toolGroupHeader: {
         flexDirection: 'row',
@@ -656,6 +593,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 8,
+        alignSelf: 'flex-start',
     },
     resultSuccess: {
         backgroundColor: 'rgba(52,199,89,0.1)',
@@ -673,37 +611,61 @@ const styles = StyleSheet.create((theme) => ({
         textAlign: 'center',
         fontFamily: 'IBMPlexMono-Regular',
     },
+
+    // Typing indicator
+    typingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 8,
+        paddingHorizontal: 4,
+    },
+    typingDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: theme.colors.textSecondary,
+    },
+
+    // Input bar
     inputBar: {
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        paddingBottom: Platform.OS === 'ios' ? 16 : 10,
+        backgroundColor: theme.colors.surface,
+    },
+    inputContainer: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        paddingHorizontal: 12,
+        backgroundColor: theme.colors.input.background,
+        borderRadius: 24,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: theme.colors.divider,
+        paddingHorizontal: 16,
         paddingVertical: 8,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
         gap: 8,
     },
     textInput: {
         flex: 1,
-        backgroundColor: theme.colors.input.background,
-        borderRadius: 20,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        fontSize: 15,
+        fontSize: 16,
         color: theme.colors.text,
-        maxHeight: 120,
+        maxHeight: 140,
+        paddingVertical: 4,
     },
     sendBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+        width: 32,
+        height: 32,
+        borderRadius: 16,
         backgroundColor: theme.colors.button.primary.background,
         alignItems: 'center',
         justifyContent: 'center',
+        marginBottom: 2,
     },
     sendBtnDisabled: {
-        opacity: 0.4,
+        opacity: 0.35,
     },
+
+    // Permission modal
     permOverlay: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.6)',
@@ -763,5 +725,58 @@ const styles = StyleSheet.create((theme) => ({
     permBtnText: {
         fontSize: 15,
         fontWeight: '600',
+    },
+
+    // Logs modal
+    logsModal: {
+        flex: 1,
+        backgroundColor: '#0D0D0D',
+    },
+    logsHeader: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        paddingHorizontal: 16,
+        paddingTop: 56,
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#2C2C2E',
+    },
+    logsTitle: {
+        fontSize: 17,
+        fontWeight: '600',
+        color: '#FFFFFF',
+    },
+    logsPath: {
+        fontSize: 11,
+        color: '#636366',
+        fontFamily: 'IBMPlexMono-Regular',
+        marginTop: 2,
+    },
+    logsClose: {
+        padding: 4,
+    },
+    logsCenter: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    logsScroll: {
+        flex: 1,
+    },
+    logsContent: {
+        padding: 12,
+        gap: 2,
+    },
+    logsEmpty: {
+        color: '#636366',
+        fontSize: 13,
+        textAlign: 'center',
+        marginTop: 40,
+    },
+    logsLine: {
+        fontSize: 11,
+        color: '#E5E5EA',
+        fontFamily: 'IBMPlexMono-Regular',
+        lineHeight: 16,
     },
 }));
