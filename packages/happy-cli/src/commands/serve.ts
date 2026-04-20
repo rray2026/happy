@@ -22,13 +22,13 @@ interface ServeOptions {
     agentArgs: string[];
     /** Gemini API key (GEMINI_API_KEY env, or GOOGLE_API_KEY env) */
     geminiApiKey: string | undefined;
-    /** Gemini model override (e.g. gemini-2.5-flash) */
-    geminiModel: string | undefined;
+    /** Model override passed to the agent (--model for Claude, -m for Gemini) */
+    model: string | undefined;
 }
 
 function parseArgs(args: string[]): ServeOptions {
     let agent: AgentType = 'claude';
-    let geminiModel: string | undefined;
+    let model: string | undefined;
     const agentArgs: string[] = [];
 
     for (let i = 0; i < args.length; i++) {
@@ -38,7 +38,7 @@ function parseArgs(args: string[]): ServeOptions {
         } else if (arg === '--gemini') {
             agent = 'gemini';
         } else if ((arg === '--model' || arg === '-m') && i + 1 < args.length) {
-            geminiModel = args[++i];
+            model = args[++i];
         } else {
             agentArgs.push(arg);
         }
@@ -51,7 +51,7 @@ function parseArgs(args: string[]): ServeOptions {
     const geminiApiKey =
         process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
 
-    return { agent, port, endpoint, agentArgs, geminiApiKey, geminiModel };
+    return { agent, port, endpoint, agentArgs, geminiApiKey, model };
 }
 
 interface ServeState {
@@ -86,14 +86,18 @@ function saveServeState(state: ServeState): void {
 async function runClaudeProcess(opts: {
     prompt: string;
     resumeSessionId: string | null;
+    model: string | undefined;
     agentArgs: string[];
     onEvent: (event: unknown) => void;
     onSessionId: (id: string) => void;
     abort: AbortSignal;
 }): Promise<number> {
-    const { prompt, resumeSessionId, agentArgs, onEvent, onSessionId, abort } = opts;
+    const { prompt, resumeSessionId, model, agentArgs, onEvent, onSessionId, abort } = opts;
 
     const cliArgs: string[] = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+    if (model) {
+        cliArgs.push('--model', model);
+    }
     if (resumeSessionId) {
         cliArgs.push('--resume', resumeSessionId);
     }
@@ -188,7 +192,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
             broadcast: (e) => server.broadcast(e),
             apiKey: opts.geminiApiKey,
             resumeSessionId: serveState?.geminiSessionId,
-            model: opts.geminiModel,
+            model: opts.model,
         })
         : null;
 
@@ -228,6 +232,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
             await runClaudeProcess({
                 prompt: text,
                 resumeSessionId: claudeSessionId,
+                model: opts.model,
                 agentArgs: opts.agentArgs,
                 onEvent: (e) => server.broadcast(e),
                 onSessionId: (id) => {
@@ -295,7 +300,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
     // ── Display startup info ─────────────────────────────────────────────────
     const qrJson = JSON.stringify(qrPayload);
-    const modelLabel = opts.geminiModel ? `  |  Model: ${opts.geminiModel}` : '';
+    const modelLabel = opts.model ? `  |  Model: ${opts.model}` : '';
     console.log(chalk.bold('\n🚀 Happy Direct Connect'));
     console.log(chalk.dim(`Agent: ${opts.agent}${modelLabel}  |  Port: ${opts.port}`));
     console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
