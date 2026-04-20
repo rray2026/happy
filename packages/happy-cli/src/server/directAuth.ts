@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import tweetnacl from 'tweetnacl';
 import { encodeBase64, decodeBase64, getRandomBytes } from '@/api/encryption';
 import type { CliKeys, DirectQRPayload, SessionCredentialPayload } from './types';
@@ -6,13 +7,30 @@ import type { CliKeys, DirectQRPayload, SessionCredentialPayload } from './types
 const NONCE_TTL_MS = 5 * 60 * 1000;   // QR nonce valid for 5 minutes
 const CREDENTIAL_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session credential valid for 30 days
 
-/** Generate a fresh Ed25519 keypair for this serve session */
-export function generateCliKeys(): CliKeys {
+/**
+ * Load a persisted Ed25519 keypair from disk, or generate a new one and save it.
+ * Persisting the keypair means webapps can reconnect across CLI restarts without
+ * re-scanning the QR code — their stored sessionCredential is still verifiable.
+ */
+export function loadOrGenerateCliKeys(keyPath: string): CliKeys {
+    try {
+        if (existsSync(keyPath)) {
+            const stored = JSON.parse(readFileSync(keyPath, 'utf8')) as { signPublicKey: string; signSecretKey: string };
+            return {
+                signPublicKey: decodeBase64(stored.signPublicKey),
+                signSecretKey: decodeBase64(stored.signSecretKey),
+            };
+        }
+    } catch {
+        // fall through to generate new keys
+    }
     const kp = tweetnacl.sign.keyPair();
-    return {
-        signPublicKey: kp.publicKey,
-        signSecretKey: kp.secretKey,
-    };
+    const keys: CliKeys = { signPublicKey: kp.publicKey, signSecretKey: kp.secretKey };
+    writeFileSync(keyPath, JSON.stringify({
+        signPublicKey: encodeBase64(keys.signPublicKey),
+        signSecretKey: encodeBase64(keys.signSecretKey),
+    }), 'utf8');
+    return keys;
 }
 
 /** Build the JSON object that will be encoded into the terminal QR code */

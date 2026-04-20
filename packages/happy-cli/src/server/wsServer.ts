@@ -119,15 +119,20 @@ export function startWsServer(opts: {
                     completeHandshake(ws, msg.webappPublicKey, credential, -1);
                 } else {
                     // ── Reconnect handshake ───────────────────────────────
+                    // Only verify signature + expiry; sessionId is intentionally not checked
+                    // so the webapp can reconnect across CLI restarts using the same key pair.
                     const verified = verifyCredential(msg.sessionCredential, cliKeys.signPublicKey);
-                    if (!verified || verified.sessionId !== sessionId) {
+                    if (!verified) {
                         logger.debug('[wsServer] Credential invalid');
                         send(ws, { type: 'error', message: 'invalid credential' });
                         ws.close();
                         return;
                     }
+                    // Issue a fresh credential carrying the current sessionId so the webapp
+                    // stays up-to-date after a CLI restart.
+                    const freshCredential = issueCredential(msg.webappPublicKey, sessionId, cliKeys.signSecretKey);
                     logger.debug(`[wsServer] Reconnect handshake OK, lastSeq=${msg.lastSeq}`);
-                    completeHandshake(ws, msg.webappPublicKey, msg.sessionCredential, msg.lastSeq);
+                    completeHandshake(ws, msg.webappPublicKey, freshCredential, msg.lastSeq);
                 }
                 return;
             }

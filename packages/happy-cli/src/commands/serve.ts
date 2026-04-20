@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import chalk from 'chalk';
 import { displayQRCode } from '@/ui/qrcode';
 import { logger } from '@/ui/logger';
-import { generateCliKeys, buildQRPayload } from '@/server/directAuth';
+import { loadOrGenerateCliKeys, buildQRPayload } from '@/server/directAuth';
 import { startWsServer } from '@/server/wsServer';
 import { GeminiAcpSession } from '@/gemini/geminiAcp';
 import { configuration } from '@/configuration';
@@ -159,7 +159,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     const opts = parseArgs(args);
 
     const sessionId = randomUUID();
-    const cliKeys = generateCliKeys();
+    const cliKeys = loadOrGenerateCliKeys(join(configuration.happyHomeDir, 'serve-keys.json'));
     const qrPayload = buildQRPayload(opts.endpoint, cliKeys, sessionId);
 
     // ── Persisted serve state (Gemini session resume) ────────────────────────
