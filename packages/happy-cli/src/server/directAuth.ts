@@ -7,6 +7,12 @@ import type { CliKeys, DirectQRPayload, SessionCredentialPayload } from './types
 const NONCE_TTL_MS = 5 * 60 * 1000;   // QR nonce valid for 5 minutes
 const CREDENTIAL_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session credential valid for 30 days
 
+/** Generate a fresh in-memory Ed25519 keypair + sessionId (used in tests) */
+export function generateCliKeys(): CliKeys & { sessionId: string } {
+    const kp = tweetnacl.sign.keyPair();
+    return { signPublicKey: kp.publicKey, signSecretKey: kp.secretKey, sessionId: randomUUID() };
+}
+
 /**
  * Load a persisted Ed25519 keypair + sessionId from disk, or generate and save them.
  * Persisting both means webapps can reconnect across CLI restarts without re-scanning
