@@ -31,6 +31,14 @@ export default function DevScreen() {
                     onPress={() => router.push('/dev/logs')}
                 />
             </ItemGroup>
+            <ItemGroup title="Direct Session">
+                <Item
+                    title="Direct Session"
+                    subtitle="Export / import session to another browser"
+                    icon={<Ionicons name="swap-horizontal-outline" size={28} color="#007AFF" />}
+                    onPress={() => router.push('/dev/direct-session')}
+                />
+            </ItemGroup>
             <ItemGroup title="Actions" footer="These actions may affect app stability">
                 <Item
                     title="Test Crash"
