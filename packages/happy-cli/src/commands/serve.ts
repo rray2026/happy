@@ -62,7 +62,7 @@ async function runClaudeProcess(opts: {
 }): Promise<number> {
     const { prompt, resumeSessionId, agentArgs, onEvent, onSessionId, abort } = opts;
 
-    const cliArgs: string[] = ['--print', '--output-format', 'stream-json', '--verbose'];
+    const cliArgs: string[] = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerouslySkipPermissions'];
     if (resumeSessionId) {
         cliArgs.push('--resume', resumeSessionId);
     }
