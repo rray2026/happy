@@ -9,7 +9,9 @@
     "workspaces": {
         "packages": [
             "packages/happy-app",
-            "packages/happy-cli"
+            "packages/happy-cli",
+            "packages/cowork-agent",
+            "packages/cowork-webapp"
         ]
     },
     "pnpm": {
