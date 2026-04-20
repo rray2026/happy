@@ -162,7 +162,9 @@ async function runClaudeProcess(opts: {
 export async function handleServeCommand(args: string[]): Promise<void> {
     const opts = parseArgs(args);
 
-    const cliKeys = loadOrGenerateCliKeys(join(configuration.happyHomeDir, 'serve-keys.json'));
+    const serveKeysPath = join(configuration.happyHomeDir, 'serve-keys.json');
+    const isReturningSession = existsSync(serveKeysPath);
+    const cliKeys = loadOrGenerateCliKeys(serveKeysPath);
     const { sessionId } = cliKeys;
     const qrPayload = buildQRPayload(opts.endpoint, cliKeys, sessionId);
 
@@ -291,16 +293,23 @@ export async function handleServeCommand(args: string[]): Promise<void> {
         },
     });
 
-    // ── Display QR code ──────────────────────────────────────────────────────
+    // ── Display startup info ─────────────────────────────────────────────────
     const qrJson = JSON.stringify(qrPayload);
-    console.log(chalk.bold('\n🚀 Happy Direct Connect'));
     const modelLabel = opts.geminiModel ? `  |  Model: ${opts.geminiModel}` : '';
+    console.log(chalk.bold('\n🚀 Happy Direct Connect'));
     console.log(chalk.dim(`Agent: ${opts.agent}${modelLabel}  |  Port: ${opts.port}`));
     console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
-    displayQRCode(qrJson);
-    console.log(chalk.yellow('\nScan the QR code with the Happy webapp to connect.'));
-    console.log(chalk.dim('\nPayload: ') + qrJson);
-    console.log(chalk.dim('Waiting for connection…\n'));
+    if (isReturningSession) {
+        console.log(chalk.green('Previous session found — webapp will reconnect automatically.'));
+        console.log(chalk.dim('\nTo connect a new device, scan the QR code:'));
+        displayQRCode(qrJson);
+        console.log(chalk.dim('Payload: ') + qrJson);
+    } else {
+        displayQRCode(qrJson);
+        console.log(chalk.yellow('\nScan the QR code with the Happy webapp to connect.'));
+        console.log(chalk.dim('\nPayload: ') + qrJson);
+    }
+    console.log();
 
     if (opts.agent === 'gemini' && !opts.geminiApiKey) {
         console.log(chalk.yellow(
