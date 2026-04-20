@@ -26,7 +26,6 @@
     "@revenuecat/purchases-js": "^1.34.0",
     "@react-navigation/native": "^7.2.0",
     "@shopify/flash-list": "~2.3.0",
-    "@slopus/happy-wire": "workspace:*",
     "@types/libsodium-wrappers": "^0.7.14",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/resolve-path": "^1.4.3",
