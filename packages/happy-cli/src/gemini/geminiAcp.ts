@@ -139,11 +139,15 @@ export class GeminiAcpSession {
     private readonly broadcast: BroadcastFn;
     private readonly apiKey: string | undefined;
     private readonly onPermissionRequest: PermissionRequestFn | undefined;
+    private readonly resumeSessionId: string | undefined;
+    private readonly model: string | undefined;
 
-    constructor(opts: { broadcast: BroadcastFn; apiKey?: string; onPermissionRequest?: PermissionRequestFn }) {
+    constructor(opts: { broadcast: BroadcastFn; apiKey?: string; onPermissionRequest?: PermissionRequestFn; resumeSessionId?: string; model?: string }) {
         this.broadcast = opts.broadcast;
         this.apiKey = opts.apiKey;
         this.onPermissionRequest = opts.onPermissionRequest;
+        this.resumeSessionId = opts.resumeSessionId;
+        this.model = opts.model;
     }
 
     // ── Public ────────────────────────────────────────────────────────────────
@@ -167,6 +171,10 @@ export class GeminiAcpSession {
         }
     }
 
+    getSessionId(): string | null {
+        return this.acpSessionId;
+    }
+
     dispose(): void {
         if (this.proc) {
             this.proc.kill();
@@ -184,9 +192,10 @@ export class GeminiAcpSession {
             env.GOOGLE_API_KEY = this.apiKey;
         }
 
-        logger.debug('[GeminiAcp] spawning gemini --experimental-acp');
+        const spawnArgs = ['--experimental-acp', ...(this.model ? ['-m', this.model] : [])];
+        logger.debug('[GeminiAcp] spawning gemini', spawnArgs.join(' '));
 
-        const proc = spawn('gemini', ['--experimental-acp'], {
+        const proc = spawn('gemini', spawnArgs, {
             cwd: process.cwd(),
             env,
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -236,6 +245,25 @@ export class GeminiAcpSession {
             clientInfo: { name: 'happy-serve', version: '1.0.0' },
         });
         logger.debug('[GeminiAcp] initialized');
+
+        // Try session/load if we have a previous session ID
+        if (this.resumeSessionId) {
+            try {
+                const loadRes = await this.rpc('session/load', {
+                    sessionId: this.resumeSessionId,
+                    cwd: process.cwd(),
+                    mcpServers: [],
+                });
+                const loadedId = (loadRes.result as Record<string, unknown> | undefined)?.sessionId;
+                if (typeof loadedId === 'string') {
+                    this.acpSessionId = loadedId;
+                    logger.debug('[GeminiAcp] session resumed:', loadedId);
+                    return;
+                }
+            } catch (err) {
+                logger.debug('[GeminiAcp] session/load failed, falling back to session/new:', (err as Error).message);
+            }
+        }
 
         // session/new
         const sessionRes = await this.rpc('session/new', {
