@@ -126,7 +126,7 @@ export function startWsServer(opts: {
                         ws.close();
                         return;
                     }
-                    logger.debug('[wsServer] Reconnect handshake OK, lastSeq=%d', msg.lastSeq);
+                    logger.debug(`[wsServer] Reconnect handshake OK, lastSeq=${msg.lastSeq}`);
                     completeHandshake(ws, msg.webappPublicKey, msg.sessionCredential, msg.lastSeq);
                 }
                 return;
