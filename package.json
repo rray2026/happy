@@ -4,8 +4,7 @@
     "scripts": {
         "cli": "pnpm --filter happy cli",
         "release": "node ./scripts/release.cjs",
-        "web": "pnpm --filter happy-app web",
-        "postinstall": "node ./scripts/postinstall.cjs"
+        "web": "pnpm --filter happy-app web"
     },
     "workspaces": {
         "packages": [
