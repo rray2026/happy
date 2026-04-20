@@ -2,3 +2,4 @@ packages:
   - "packages/happy-app"
   - "packages/happy-cli"
   - "packages/cowork-webapp"
+  - "packages/cowork-agent"

@@ -17,6 +17,40 @@ importers:
         specifier: ^3.90.0
         version: 3.114.17
 
+  packages/cowork-agent:
+    dependencies:
+      chalk:
+        specifier: ^5.6.2
+        version: 5.6.2
+      qrcode-terminal:
+        specifier: ^0.12.0
+        version: 0.12.0
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
+      ws:
+        specifier: ^8.19.0
+        version: 8.19.0
+    devDependencies:
+      '@types/node':
+        specifier: '>=20'
+        version: 20.19.39
+      '@types/qrcode-terminal':
+        specifier: ^0.12.2
+        version: 0.12.2
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@20.19.39)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
   packages/cowork-webapp:
     dependencies:
       dompurify:
