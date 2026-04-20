@@ -8,27 +8,34 @@ const NONCE_TTL_MS = 5 * 60 * 1000;   // QR nonce valid for 5 minutes
 const CREDENTIAL_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session credential valid for 30 days
 
 /**
- * Load a persisted Ed25519 keypair from disk, or generate a new one and save it.
- * Persisting the keypair means webapps can reconnect across CLI restarts without
- * re-scanning the QR code — their stored sessionCredential is still verifiable.
+ * Load a persisted Ed25519 keypair + sessionId from disk, or generate and save them.
+ * Persisting both means webapps can reconnect across CLI restarts without re-scanning
+ * the QR code — the stored sessionCredential (which embeds sessionId) stays valid.
  */
-export function loadOrGenerateCliKeys(keyPath: string): CliKeys {
+export function loadOrGenerateCliKeys(keyPath: string): CliKeys & { sessionId: string } {
     try {
         if (existsSync(keyPath)) {
-            const stored = JSON.parse(readFileSync(keyPath, 'utf8')) as { signPublicKey: string; signSecretKey: string };
+            const stored = JSON.parse(readFileSync(keyPath, 'utf8')) as {
+                signPublicKey: string;
+                signSecretKey: string;
+                sessionId: string;
+            };
             return {
                 signPublicKey: decodeBase64(stored.signPublicKey),
                 signSecretKey: decodeBase64(stored.signSecretKey),
+                sessionId: stored.sessionId,
             };
         }
     } catch {
         // fall through to generate new keys
     }
     const kp = tweetnacl.sign.keyPair();
-    const keys: CliKeys = { signPublicKey: kp.publicKey, signSecretKey: kp.secretKey };
+    const sessionId = randomUUID();
+    const keys = { signPublicKey: kp.publicKey, signSecretKey: kp.secretKey, sessionId };
     writeFileSync(keyPath, JSON.stringify({
-        signPublicKey: encodeBase64(keys.signPublicKey),
-        signSecretKey: encodeBase64(keys.signSecretKey),
+        signPublicKey: encodeBase64(kp.publicKey),
+        signSecretKey: encodeBase64(kp.secretKey),
+        sessionId,
     }), 'utf8');
     return keys;
 }

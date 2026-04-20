@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -158,8 +157,8 @@ async function runClaudeProcess(opts: {
 export async function handleServeCommand(args: string[]): Promise<void> {
     const opts = parseArgs(args);
 
-    const sessionId = randomUUID();
     const cliKeys = loadOrGenerateCliKeys(join(configuration.happyHomeDir, 'serve-keys.json'));
+    const { sessionId } = cliKeys;
     const qrPayload = buildQRPayload(opts.endpoint, cliKeys, sessionId);
 
     // ── Persisted serve state (Gemini session resume) ────────────────────────
