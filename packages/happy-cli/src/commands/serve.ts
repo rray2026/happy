@@ -182,12 +182,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
             broadcast: (e) => server.broadcast(e),
             apiKey: opts.geminiApiKey,
             resumeSessionId: serveState?.geminiSessionId,
-            onPermissionRequest: (permissionId, toolName, input) => {
-                return new Promise<boolean>((resolve) => {
-                    permissionPending.set(permissionId, resolve);
-                    server.broadcast({ type: 'permission-request', permissionId, toolName, input });
-                });
-            },
         })
         : null;
 
