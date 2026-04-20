@@ -40,7 +40,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Platform, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import type { ModelMode, PermissionMode } from '@/components/PermissionModeSelector';
@@ -58,6 +58,20 @@ export const SessionView = React.memo((props: { id: string }) => {
     const realtimeStatus = useRealtimeStatus();
     const isTablet = useIsTablet();
     const [sessionActionsAnchor, setSessionActionsAnchor] = React.useState<SessionActionsAnchor | null>(null);
+    const [isReadingMode, setIsReadingMode] = React.useState(false);
+    const readingModeAnim = React.useRef(new Animated.Value(0)).current;
+    const isReadingModeRef = React.useRef(false);
+
+    const handleReadingModeChange = React.useCallback((active: boolean) => {
+        if (active === isReadingModeRef.current) return;
+        isReadingModeRef.current = active;
+        setIsReadingMode(active);
+        Animated.timing(readingModeAnim, {
+            toValue: active ? 1 : 0,
+            duration: 220,
+            useNativeDriver: true,
+        }).start();
+    }, [readingModeAnim]);
 
     // Compute header props based on session state
     const headerProps = useMemo(() => {
@@ -123,12 +137,22 @@ export const SessionView = React.memo((props: { id: string }) => {
 
             {/* Header - always shown on desktop/Mac, hidden in landscape mode only on actual phones */}
             {!(isLandscape && deviceType === 'phone' && Platform.OS !== 'web') && (
-                <View style={{
+                <Animated.View style={{
                     position: 'absolute',
                     top: 0,
                     left: 0,
                     right: 0,
-                    zIndex: 1000
+                    zIndex: 1000,
+                    opacity: readingModeAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 0],
+                    }),
+                    transform: [{
+                        translateY: readingModeAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, -(safeArea.top + headerHeight + 10)],
+                        })
+                    }],
                 }}>
                     <ChatHeaderView
                         {...headerProps}
@@ -149,11 +173,11 @@ export const SessionView = React.memo((props: { id: string }) => {
                     {!isTablet && realtimeStatus !== 'disconnected' && (
                         <VoiceAssistantStatusBar variant="full" />
                     )}
-                </View>
+                </Animated.View>
             )}
 
             {/* Content based on state */}
-            <View style={{ flex: 1, paddingTop: !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web') ? safeArea.top + headerHeight + (!isTablet && realtimeStatus !== 'disconnected' ? 32 : 0) : 0 }}>
+            <View style={{ flex: 1, paddingTop: isReadingMode ? safeArea.top : !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web') ? safeArea.top + headerHeight + (!isTablet && realtimeStatus !== 'disconnected' ? 32 : 0) : 0 }}>
                 {!isDataReady ? (
                     // Loading state
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -168,7 +192,14 @@ export const SessionView = React.memo((props: { id: string }) => {
                     </View>
                 ) : (
                     // Normal session view
-                    <SessionViewLoaded key={sessionId} sessionId={sessionId} session={session} />
+                    <SessionViewLoaded
+                        key={sessionId}
+                        sessionId={sessionId}
+                        session={session}
+                        isReadingMode={isReadingMode}
+                        readingModeAnim={readingModeAnim}
+                        onReadingModeChange={handleReadingModeChange}
+                    />
                 )}
             </View>
             {Platform.OS === 'web' && session && (
@@ -192,7 +223,13 @@ export const SessionView = React.memo((props: { id: string }) => {
 });
 
 
-function SessionViewLoaded({ sessionId, session }: { sessionId: string, session: Session }) {
+function SessionViewLoaded({ sessionId, session, isReadingMode, readingModeAnim, onReadingModeChange }: {
+    sessionId: string;
+    session: Session;
+    isReadingMode: boolean;
+    readingModeAnim: Animated.Value;
+    onReadingModeChange: (active: boolean) => void;
+}) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const safeArea = useSafeAreaInsets();
@@ -295,6 +332,22 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
         },
     }), []);
 
+    // Reading mode: delay unmounting input until fade-out completes
+    const [inputRendered, setInputRendered] = React.useState(true);
+    React.useEffect(() => {
+        if (isReadingMode) {
+            const timer = setTimeout(() => setInputRendered(false), 240);
+            return () => clearTimeout(timer);
+        } else {
+            setInputRendered(true);
+        }
+    }, [isReadingMode]);
+
+    const inputOpacity = readingModeAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [1, 0],
+    });
+
 
     // Handle microphone button press - memoized to prevent button flashing
     const handleMicrophonePress = React.useCallback(async () => {
@@ -360,7 +413,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
         <>
             <Deferred>
                 {messages.length > 0 && (
-                    <ChatList session={session} />
+                    <ChatList session={session} onReadingModeChange={onReadingModeChange} />
                 )}
             </Deferred>
         </>
@@ -494,7 +547,14 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
             <View style={{ flexBasis: 0, flexGrow: 1, paddingBottom: safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 8 : 0) }}>
                 <AgentContentView
                     content={content}
-                    input={input}
+                    input={inputRendered ? (
+                        <Animated.View
+                            pointerEvents={isReadingMode ? 'none' : 'auto'}
+                            style={{ opacity: inputOpacity }}
+                        >
+                            {input}
+                        </Animated.View>
+                    ) : null}
                     placeholder={placeholder}
                 />
             </View >

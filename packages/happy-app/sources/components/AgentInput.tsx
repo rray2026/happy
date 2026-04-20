@@ -84,8 +84,8 @@ const MAX_CONTEXT_SIZE = 190000;
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
         alignItems: 'center',
-        paddingBottom: 8,
-        paddingTop: 8,
+        paddingBottom: 6,
+        paddingTop: 6,
     },
     innerContainer: {
         width: '100%',
@@ -96,7 +96,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderRadius: Platform.select({ default: 16, android: 20 }),
         overflow: 'hidden',
         paddingVertical: 2,
-        paddingBottom: 8,
+        paddingBottom: 4,
         paddingHorizontal: 8,
     },
     inputContainer: {
@@ -242,9 +242,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         borderRadius: Platform.select({ default: 16, android: 20 }),
         paddingHorizontal: 8,
-        paddingVertical: 6,
+        paddingVertical: 4,
         justifyContent: 'center',
-        height: 32,
+        height: 28,
     },
     actionButtonPressed: {
         opacity: 0.7,
@@ -253,9 +253,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         color: theme.colors.button.secondary.tint,
     },
     sendButton: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
+        width: 28,
+        height: 28,
+        borderRadius: 14,
         justifyContent: 'center',
         alignItems: 'center',
         flexShrink: 0,
@@ -521,33 +521,34 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             return true;
         }
 
-        // Original key handling
-        if (Platform.OS === 'web') {
-            // On mobile web (touch devices), Enter should insert a newline since
-            // there's no Shift key available. Users send via the send button instead.
-            // Use pointer:coarse media query instead of ontouchstart/maxTouchPoints
-            // to avoid false positives on Windows touch-screen laptops with keyboards.
-            const isTouchDevice = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
-            if (agentInputEnterToSend && event.key === 'Enter' && !event.shiftKey && !isTouchDevice) {
+        // Enter to send: web (non-touch) and native (external keyboard)
+        if (event.key === 'Enter' && !event.shiftKey) {
+            const isTouchDevice = Platform.OS === 'web'
+                ? (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches)
+                : false;
+            if (agentInputEnterToSend && !isTouchDevice) {
                 if (props.value.trim()) {
                     if (isSendBlocked) {
                         handleBlockedSendAttempt();
                     } else if (!props.isSendDisabled) {
                         props.onSend();
                     }
-                    return true; // Key was handled
+                    return true;
                 }
             }
-            // Handle Shift+Tab for permission mode switching
+        }
+
+        // Web-only: Shift+Tab for permission mode switching
+        if (Platform.OS === 'web') {
             if (event.key === 'Tab' && event.shiftKey && props.onPermissionModeChange && availableModes.length > 0) {
                 const currentIndex = availableModes.findIndex((mode) => mode.key === permissionModeKey);
                 const nextIndex = ((currentIndex >= 0 ? currentIndex : 0) + 1) % availableModes.length;
                 props.onPermissionModeChange(availableModes[nextIndex]);
                 hapticsLight();
-                return true; // Key was handled, prevent default tab behavior
+                return true;
             }
-
         }
+
         return false; // Key was not handled
     }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, agentInputEnterToSend, props.value, props.onSend, props.onPermissionModeChange, availableModes, permissionModeKey, isSendBlocked, handleBlockedSendAttempt, props.isSendDisabled]);
 
@@ -838,9 +839,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         flexDirection: 'row',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        paddingHorizontal: 16,
-                        paddingBottom: 4,
-                        minHeight: 20, // Fixed minimum height to prevent jumping
+                        paddingHorizontal: 12,
+                        paddingBottom: 2,
+                        minHeight: 16,
                     }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 }}>
                             {props.connectionStatus && (
@@ -990,8 +991,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     alignItems: 'center',
                                     borderRadius: Platform.select({ default: 16, android: 20 }),
                                     paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    height: 32,
+                                    paddingVertical: 4,
+                                    height: 28,
                                     opacity: p.pressed ? 0.7 : 1,
                                     gap: 6,
                                 })}
@@ -1025,8 +1026,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     alignItems: 'center',
                                     borderRadius: Platform.select({ default: 16, android: 20 }),
                                     paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    height: 32,
+                                    paddingVertical: 4,
+                                    height: 28,
                                     opacity: p.pressed ? 0.7 : 1,
                                     gap: 6,
                                 })}
@@ -1084,9 +1085,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             alignItems: 'center',
                                             borderRadius: Platform.select({ default: 16, android: 20 }),
                                             paddingHorizontal: 8,
-                                            paddingVertical: 6,
+                                            paddingVertical: 4,
                                             justifyContent: 'center',
-                                            height: 32,
+                                            height: 28,
                                             opacity: p.pressed ? 0.7 : 1,
                                         })}
                                     >
@@ -1111,9 +1112,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             alignItems: 'center',
                                             borderRadius: Platform.select({ default: 16, android: 20 }),
                                             paddingHorizontal: 10,
-                                            paddingVertical: 6,
+                                            paddingVertical: 4,
                                             justifyContent: 'center',
-                                            height: 32,
+                                            height: 28,
                                             opacity: p.pressed ? 0.7 : 1,
                                             gap: 6,
                                         })}
@@ -1143,9 +1144,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                 alignItems: 'center',
                                                 borderRadius: Platform.select({ default: 16, android: 20 }),
                                                 paddingHorizontal: 8,
-                                                paddingVertical: 6,
+                                                paddingVertical: 4,
                                                 justifyContent: 'center',
-                                                height: 32,
+                                                height: 28,
                                                 opacity: p.pressed ? 0.7 : 1,
                                             })}
                                             hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
@@ -1264,8 +1265,8 @@ function GitStatusButton({ sessionId, onPress }: { sessionId?: string, onPress?:
                 alignItems: 'center',
                 borderRadius: Platform.select({ default: 16, android: 20 }),
                 paddingHorizontal: 8,
-                paddingVertical: 6,
-                height: 32,
+                paddingVertical: 4,
+                height: 28,
                 opacity: p.pressed ? 0.7 : 1,
                 flex: 1,
                 overflow: 'hidden',

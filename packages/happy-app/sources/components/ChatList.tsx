@@ -12,14 +12,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 const SCROLL_THRESHOLD = 300;
+const READING_FOCUS_THRESHOLD = 100;
 
-export const ChatList = React.memo((props: { session: Session }) => {
+export const ChatList = React.memo((props: { session: Session; onReadingModeChange?: (active: boolean) => void }) => {
     const { messages } = useSessionMessages(props.session.id);
     return (
         <ChatListInternal
             metadata={props.session.metadata}
             sessionId={props.session.id}
             messages={messages}
+            onReadingModeChange={props.onReadingModeChange}
         />
     )
 });
@@ -41,10 +43,12 @@ const ChatListInternal = React.memo((props: {
     metadata: Metadata | null,
     sessionId: string,
     messages: Message[],
+    onReadingModeChange?: (active: boolean) => void,
 }) => {
     const { theme } = useUnistyles();
     const flatListRef = React.useRef<FlatList>(null);
     const [showScrollButton, setShowScrollButton] = React.useState(false);
+    const isReadingModeRef = React.useRef(false);
 
     const keyExtractor = useCallback((item: any) => item.id, []);
     const renderItem = useCallback(({ item }: { item: any }) => (
@@ -56,7 +60,13 @@ const ChatListInternal = React.memo((props: {
     const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetY = e.nativeEvent.contentOffset.y;
         setShowScrollButton(offsetY > SCROLL_THRESHOLD);
-    }, []);
+
+        const shouldBeReading = offsetY > READING_FOCUS_THRESHOLD;
+        if (shouldBeReading !== isReadingModeRef.current) {
+            isReadingModeRef.current = shouldBeReading;
+            props.onReadingModeChange?.(shouldBeReading);
+        }
+    }, [props.onReadingModeChange]);
 
     const scrollToBottom = useCallback(() => {
         flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
