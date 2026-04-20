@@ -15,6 +15,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { directSocket, DirectSocketStatus } from '@/sync/directSocket';
 import { TokenStorage } from '@/auth/tokenStorage';
 import { Ionicons } from '@expo/vector-icons';
+import { MarkdownView } from '@/components/markdown/MarkdownView';
 
 // ── Stream-json event types ───────────────────────────────────────────────────
 
@@ -202,6 +203,11 @@ export default memo(function DirectSessionScreen() {
                                 continue;
                             }
                         }
+                        // Skip server echo of a user message already shown locally
+                        if (item.kind === 'user') {
+                            const last = merged[merged.length - 1];
+                            if (last?.kind === 'user' && last.text === item.text) continue;
+                        }
                         merged.push(item);
                     }
                     return merged;
@@ -240,6 +246,7 @@ export default memo(function DirectSessionScreen() {
         if (!text || status !== 'connected') return;
         directSocket.sendInput(text);
         setInputText('');
+        setItems((prev) => [...prev, { kind: 'user', text, id: nextId() }]);
     }, [inputText, status]);
 
     const handlePermission = useCallback((approved: boolean) => {
@@ -431,7 +438,7 @@ const MessageItem = memo(function MessageItem({ item }: { item: DisplayItem }) {
         case 'assistant':
             return (
                 <View style={styles.assistantBubble}>
-                    <Text style={styles.assistantText}>{item.text}</Text>
+                    <MarkdownView markdown={item.text} />
                 </View>
             );
         case 'tool-group':
