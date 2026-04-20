@@ -21,11 +21,6 @@ import { useAllMachines } from '@/sync/storage';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { useUnistyles } from 'react-native-unistyles';
 import { layout } from '@/components/layout';
-import { useHappyAction } from '@/hooks/useHappyAction';
-import { getGitHubOAuthParams, disconnectGitHub } from '@/sync/apiGithub';
-import { useProfile } from '@/sync/storage';
-import { getDisplayName, getAvatarUrl, getBio } from '@/sync/profile';
-import { Avatar } from '@/components/Avatar';
 import { t } from '@/text';
 
 export const SettingsView = React.memo(function SettingsView() {
@@ -48,11 +43,6 @@ export const SettingsView = React.memo(function SettingsView() {
             : allMachinesWithOffline.filter(isMachineOnline),
         [allMachinesWithOffline, showOfflineMachines]
     );
-    const profile = useProfile();
-    const displayName = getDisplayName(profile);
-    const avatarUrl = getAvatarUrl(profile);
-    const bio = getBio(profile);
-
     const { connectTerminal, connectWithUrl, isLoading } = useConnectTerminal();
 
     const handleGitHub = async () => {
@@ -95,63 +85,17 @@ export const SettingsView = React.memo(function SettingsView() {
         resetTimeout: 2000
     });
 
-    // Connection status
-    const isGitHubConnected = !!profile.github;
-
-    // GitHub connection
-    const [connectingGitHub, connectGitHub] = useHappyAction(async () => {
-        const params = await getGitHubOAuthParams(auth.credentials!);
-        await Linking.openURL(params.url);
-    });
-
-    // GitHub disconnection
-    const [disconnectingGitHub, handleDisconnectGitHub] = useHappyAction(async () => {
-        const confirmed = await Modal.confirm(
-            t('modals.disconnectGithub'),
-            t('modals.disconnectGithubConfirm'),
-            { confirmText: t('modals.disconnect'), destructive: true }
-        );
-        if (confirmed) {
-            await disconnectGitHub(auth.credentials!);
-        }
-    });
-
     return (
 
         <ItemList style={{ paddingTop: 0 }}>
             {/* App Info Header */}
             <View style={{ maxWidth: layout.maxWidth, alignSelf: 'center', width: '100%' }}>
                 <View style={{ alignItems: 'center', paddingVertical: 24, backgroundColor: theme.colors.surface, marginTop: 16, borderRadius: 12, marginHorizontal: 16 }}>
-                    {profile.firstName ? (
-                        // Profile view: Avatar + name + version
-                        <>
-                            <View style={{ marginBottom: 12 }}>
-                                <Avatar
-                                    id={profile.id}
-                                    size={90}
-                                    imageUrl={avatarUrl}
-                                    thumbhash={profile.avatar?.thumbhash}
-                                />
-                            </View>
-                            <Text style={{ fontSize: 20, fontWeight: '600', color: theme.colors.text, marginBottom: bio ? 4 : 8 }}>
-                                {displayName}
-                            </Text>
-                            {bio && (
-                                <Text style={{ fontSize: 14, color: theme.colors.textSecondary, textAlign: 'center', marginBottom: 8, paddingHorizontal: 16 }}>
-                                    {bio}
-                                </Text>
-                            )}
-                        </>
-                    ) : (
-                        // Logo view: Original logo + version
-                        <>
-                            <Image
-                                source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
-                                contentFit="contain"
-                                style={{ width: 300, height: 90, marginBottom: 12 }}
-                            />
-                        </>
-                    )}
+                    <Image
+                        source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
+                        contentFit="contain"
+                        style={{ width: 300, height: 90, marginBottom: 12 }}
+                    />
                 </View>
             </View>
 
@@ -196,36 +140,6 @@ export const SettingsView = React.memo(function SettingsView() {
                     onPress={isPro ? undefined : handleSubscribe}
                 />
             </ItemGroup>
-
-            <ItemGroup title={t('settings.connectedAccounts')}>
-                <Item
-                    title={t('settings.github')}
-                    subtitle={isGitHubConnected
-                        ? t('settings.githubConnected', { login: profile.github?.login! })
-                        : t('settings.connectGithubAccount')
-                    }
-                    icon={
-                        <Ionicons
-                            name="logo-github"
-                            size={29}
-                            color={isGitHubConnected ? theme.colors.status.connected : theme.colors.textSecondary}
-                        />
-                    }
-                    onPress={isGitHubConnected ? handleDisconnectGitHub : connectGitHub}
-                    loading={connectingGitHub || disconnectingGitHub}
-                    showChevron={false}
-                />
-            </ItemGroup>
-
-            {/* Social */}
-            {/* <ItemGroup title={t('settings.social')}>
-                <Item
-                    title={t('navigation.friends')}
-                    subtitle={t('friends.manageFriends')}
-                    icon={<Ionicons name="people-outline" size={29} color="#007AFF" />}
-                    onPress={() => router.push('/friends')}
-                />
-            </ItemGroup> */}
 
             {/* Machines (sorted: online first, then last seen desc) */}
             {allMachinesWithOffline.length > 0 && (
