@@ -1,38 +1,21 @@
 /**
- * Session operations for remote procedure calls
- * Provides strictly typed functions for all session-related RPC operations
+ * Session operations — direct-connect mode.
+ * All RPCs go through directSocket; the sessionId param is kept for API compatibility
+ * but is not used for routing (there is only one active CLI session at a time).
  */
 
-import { apiSocket } from './apiSocket';
-import { sync } from './sync';
+import { directSocket } from './directSocket';
 import type { MachineMetadata } from './storageTypes';
 
-// Strict type definitions for all operations
+// ── Response types ────────────────────────────────────────────────────────────
 
-// Permission operation types
-interface SessionPermissionRequest {
-    id: string;
-    approved: boolean;
-    reason?: string;
-    mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-    allowTools?: string[];
-    updatedInput?: Record<string, unknown>;
-    decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort';
-}
-
-// Mode change operation types
-interface SessionModeChangeRequest {
-    to: 'remote' | 'local';
-}
-
-// Bash operation types
-interface SessionBashRequest {
+export interface SessionBashRequest {
     command: string;
     cwd?: string;
     timeout?: number;
 }
 
-interface SessionBashResponse {
+export interface SessionBashResponse {
     success: boolean;
     stdout: string;
     stderr: string;
@@ -40,55 +23,51 @@ interface SessionBashResponse {
     error?: string;
 }
 
-// Read file operation types
 interface SessionReadFileRequest {
     path: string;
 }
 
-interface SessionReadFileResponse {
+export interface SessionReadFileResponse {
     success: boolean;
-    content?: string; // base64 encoded
+    content?: string;
     error?: string;
 }
 
-// Write file operation types
 interface SessionWriteFileRequest {
     path: string;
-    content: string; // base64 encoded
+    content: string;
     expectedHash?: string | null;
 }
 
-interface SessionWriteFileResponse {
+export interface SessionWriteFileResponse {
     success: boolean;
     hash?: string;
     error?: string;
 }
 
-// List directory operation types
 interface SessionListDirectoryRequest {
     path: string;
 }
 
-interface DirectoryEntry {
+export interface DirectoryEntry {
     name: string;
     type: 'file' | 'directory' | 'other';
     size?: number;
     modified?: number;
 }
 
-interface SessionListDirectoryResponse {
+export interface SessionListDirectoryResponse {
     success: boolean;
     entries?: DirectoryEntry[];
     error?: string;
 }
 
-// Directory tree operation types
 interface SessionGetDirectoryTreeRequest {
     path: string;
     maxDepth: number;
 }
 
-interface TreeNode {
+export interface TreeNode {
     name: string;
     path: string;
     type: 'file' | 'directory';
@@ -97,19 +76,18 @@ interface TreeNode {
     children?: TreeNode[];
 }
 
-interface SessionGetDirectoryTreeResponse {
+export interface SessionGetDirectoryTreeResponse {
     success: boolean;
     tree?: TreeNode;
     error?: string;
 }
 
-// Ripgrep operation types
 interface SessionRipgrepRequest {
     args: string[];
     cwd?: string;
 }
 
-interface SessionRipgrepResponse {
+export interface SessionRipgrepResponse {
     success: boolean;
     exitCode?: number;
     stdout?: string;
@@ -117,23 +95,16 @@ interface SessionRipgrepResponse {
     error?: string;
 }
 
-// Kill session operation types
-interface SessionKillRequest {
-    // No parameters needed
-}
-
-interface SessionKillResponse {
+export interface SessionKillResponse {
     success: boolean;
     message: string;
 }
 
-// Response types for spawn session
 export type SpawnSessionResult =
     | { type: 'success'; sessionId: string }
     | { type: 'requestToApproveDirectoryCreation'; directory: string }
     | { type: 'error'; errorMessage: string };
 
-// Options for spawning a session
 export interface SpawnSessionOptions {
     machineId: string;
     directory: string;
@@ -147,441 +118,168 @@ export interface ResumeSessionOptions {
     sessionId: string;
 }
 
-// Exported session operation functions
+// ── Helper ────────────────────────────────────────────────────────────────────
 
-/**
- * Spawn a new remote session on a specific machine
- */
-export async function machineSpawnNewSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
-
-    const { machineId, directory, approvedNewDirectoryCreation = false, token, agent } = options;
-
-    try {
-        const result = await apiSocket.machineRPC<SpawnSessionResult, {
-            type: 'spawn-in-directory'
-            directory: string
-            approvedNewDirectoryCreation?: boolean,
-            token?: string,
-            agent?: 'codex' | 'claude' | 'gemini' | 'openclaw',
-        }>(
-            machineId,
-            'spawn-happy-session',
-            { type: 'spawn-in-directory', directory, approvedNewDirectoryCreation, token, agent }
-        );
-        return result;
-    } catch (error) {
-        // Handle RPC errors
-        return {
-            type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to spawn session'
-        };
-    }
+function rpcId(): string {
+    return Math.random().toString(36).slice(2);
 }
 
-export async function machineResumeSession(options: ResumeSessionOptions): Promise<SpawnSessionResult> {
-    const { machineId, sessionId } = options;
-
-    try {
-        const result = await apiSocket.machineRPC<SpawnSessionResult, { sessionId: string }>(
-            machineId,
-            'resume-happy-session',
-            { sessionId },
-        );
-        return result;
-    } catch (error) {
-        return {
-            type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to resume session',
-        };
-    }
+async function sessionRPC<T>(method: string, params: unknown): Promise<T> {
+    const res = await directSocket.rpc(rpcId(), method, params);
+    if (res.error) throw new Error(res.error);
+    return res.result as T;
 }
 
-/**
- * Permanently remove a machine from the server. Sessions spawned by the
- * machine are preserved; only the Machine row and its AccessKeys are deleted.
- */
-export async function machineDelete(machineId: string): Promise<{ success: boolean; message?: string }> {
-    try {
-        const response = await apiSocket.request(`/v1/machines/${machineId}`, {
-            method: 'DELETE'
-        });
-        if (response.ok) {
-            return { success: true };
-        }
-        const error = await response.text();
-        return { success: false, message: error || 'Failed to delete machine' };
-    } catch (error) {
-        return {
-            success: false,
-            message: error instanceof Error ? error.message : 'Unknown error'
-        };
-    }
-}
+// ── Session operations ────────────────────────────────────────────────────────
 
-/**
- * Stop the daemon on a specific machine
- */
-export async function machineStopDaemon(machineId: string): Promise<{ message: string }> {
-    const result = await apiSocket.machineRPC<{ message: string }, {}>(
-        machineId,
-        'stop-daemon',
-        {}
-    );
-    return result;
-}
-
-/**
- * Execute a bash command on a specific machine
- */
-export async function machineBash(
-    machineId: string,
-    command: string,
-    cwd: string
-): Promise<{
-    success: boolean;
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-}> {
-    try {
-        const result = await apiSocket.machineRPC<{
-            success: boolean;
-            stdout: string;
-            stderr: string;
-            exitCode: number;
-        }, {
-            command: string;
-            cwd: string;
-        }>(
-            machineId,
-            'bash',
-            { command, cwd }
-        );
-        return result;
-    } catch (error) {
-        return {
-            success: false,
-            stdout: '',
-            stderr: error instanceof Error ? error.message : 'Unknown error',
-            exitCode: -1
-        };
-    }
-}
-
-/**
- * Update machine metadata with optimistic concurrency control and automatic retry
- */
-export async function machineUpdateMetadata(
-    machineId: string,
-    metadata: MachineMetadata,
-    expectedVersion: number,
-    maxRetries: number = 3
-): Promise<{ version: number; metadata: string }> {
-    let currentVersion = expectedVersion;
-    let currentMetadata = { ...metadata };
-    let retryCount = 0;
-
-    const machineEncryption = sync.encryption.getMachineEncryption(machineId);
-    if (!machineEncryption) {
-        throw new Error(`Machine encryption not found for ${machineId}`);
-    }
-
-    while (retryCount < maxRetries) {
-        const encryptedMetadata = await machineEncryption.encryptRaw(currentMetadata);
-
-        const result = await apiSocket.emitWithAck<{
-            result: 'success' | 'version-mismatch' | 'error';
-            version?: number;
-            metadata?: string;
-            message?: string;
-        }>('machine-update-metadata', {
-            machineId,
-            metadata: encryptedMetadata,
-            expectedVersion: currentVersion
-        });
-
-        if (result.result === 'success') {
-            return {
-                version: result.version!,
-                metadata: result.metadata!
-            };
-        } else if (result.result === 'version-mismatch') {
-            // Get the latest version and metadata from the response
-            currentVersion = result.version!;
-            const latestMetadata = await machineEncryption.decryptRaw(result.metadata!) as MachineMetadata;
-
-            // Merge our changes with the latest metadata
-            // Preserve the displayName we're trying to set, but use latest values for other fields
-            currentMetadata = {
-                ...latestMetadata,
-                displayName: metadata.displayName // Keep our intended displayName change
-            };
-
-            retryCount++;
-
-            // If we've exhausted retries, throw error
-            if (retryCount >= maxRetries) {
-                throw new Error(`Failed to update after ${maxRetries} retries due to version conflicts`);
-            }
-
-            // Otherwise, loop will retry with updated version and merged metadata
-        } else {
-            throw new Error(result.message || 'Failed to update machine metadata');
-        }
-    }
-
-    throw new Error('Unexpected error in machineUpdateMetadata');
-}
-
-/**
- * Abort the current session operation
- */
-export async function sessionAbort(sessionId: string): Promise<void> {
-    await apiSocket.sessionRPC(sessionId, 'abort', {
+export async function sessionAbort(_sessionId: string): Promise<void> {
+    await directSocket.rpc(rpcId(), 'abort', {
         reason: `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.`
     });
 }
 
-/**
- * Allow a permission request
- */
-export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
-    const request: SessionPermissionRequest = { id, approved: true, mode, allowTools: allowedTools, decision, updatedInput };
-    await apiSocket.sessionRPC(sessionId, 'permission', request);
+export async function sessionAllow(
+    _sessionId: string,
+    id: string,
+    mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan',
+    allowedTools?: string[],
+    decision?: 'approved' | 'approved_for_session',
+    updatedInput?: Record<string, unknown>
+): Promise<void> {
+    await directSocket.rpc(rpcId(), 'permissionResponse', {
+        permissionId: id,
+        approved: true,
+        mode,
+        allowTools: allowedTools,
+        decision,
+        updatedInput,
+    });
 }
 
-/**
- * Deny a permission request
- */
-export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
-    const request: SessionPermissionRequest = { id, approved: false, mode, allowTools: allowedTools, decision };
-    await apiSocket.sessionRPC(sessionId, 'permission', request);
+export async function sessionDeny(
+    _sessionId: string,
+    id: string,
+    mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan',
+    allowedTools?: string[],
+    decision?: 'denied' | 'abort'
+): Promise<void> {
+    await directSocket.rpc(rpcId(), 'permissionResponse', {
+        permissionId: id,
+        approved: false,
+        mode,
+        allowTools: allowedTools,
+        decision,
+    });
 }
 
-/**
- * Request mode change for a session
- */
-export async function sessionSwitch(sessionId: string, to: 'remote' | 'local'): Promise<boolean> {
-    const request: SessionModeChangeRequest = { to };
-    const response = await apiSocket.sessionRPC<boolean, SessionModeChangeRequest>(
-        sessionId,
-        'switch',
-        request,
-    );
-    return response;
-}
-
-/**
- * Execute a bash command in the session
- */
-export async function sessionBash(sessionId: string, request: SessionBashRequest): Promise<SessionBashResponse> {
+export async function sessionBash(_sessionId: string, request: SessionBashRequest): Promise<SessionBashResponse> {
     try {
-        const response = await apiSocket.sessionRPC<SessionBashResponse, SessionBashRequest>(
-            sessionId,
-            'bash',
-            request
-        );
-        return response;
+        return await sessionRPC<SessionBashResponse>('bash', request);
     } catch (error) {
-        return {
-            success: false,
-            stdout: '',
-            stderr: error instanceof Error ? error.message : 'Unknown error',
-            exitCode: -1,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
+        return { success: false, stdout: '', stderr: error instanceof Error ? error.message : 'Unknown error', exitCode: -1, error: String(error) };
     }
 }
 
-/**
- * Read a file from the session
- */
-export async function sessionReadFile(sessionId: string, path: string): Promise<SessionReadFileResponse> {
+export async function sessionReadFile(_sessionId: string, path: string): Promise<SessionReadFileResponse> {
     try {
-        const request: SessionReadFileRequest = { path };
-        const response = await apiSocket.sessionRPC<SessionReadFileResponse, SessionReadFileRequest>(
-            sessionId,
-            'readFile',
-            request
-        );
-        return response;
+        return await sessionRPC<SessionReadFileResponse>('readFile', { path });
     } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
 
-/**
- * Write a file to the session
- */
 export async function sessionWriteFile(
-    sessionId: string,
+    _sessionId: string,
     path: string,
     content: string,
     expectedHash?: string | null
 ): Promise<SessionWriteFileResponse> {
     try {
-        const request: SessionWriteFileRequest = { path, content, expectedHash };
-        const response = await apiSocket.sessionRPC<SessionWriteFileResponse, SessionWriteFileRequest>(
-            sessionId,
-            'writeFile',
-            request
-        );
-        return response;
+        return await sessionRPC<SessionWriteFileResponse>('writeFile', { path, content, expectedHash });
     } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
 
-/**
- * List directory contents in the session
- */
-export async function sessionListDirectory(sessionId: string, path: string): Promise<SessionListDirectoryResponse> {
+export async function sessionListDirectory(_sessionId: string, path: string): Promise<SessionListDirectoryResponse> {
     try {
-        const request: SessionListDirectoryRequest = { path };
-        const response = await apiSocket.sessionRPC<SessionListDirectoryResponse, SessionListDirectoryRequest>(
-            sessionId,
-            'listDirectory',
-            request
-        );
-        return response;
+        return await sessionRPC<SessionListDirectoryResponse>('listDirectory', { path });
     } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
 
-/**
- * Get directory tree from the session
- */
 export async function sessionGetDirectoryTree(
-    sessionId: string,
+    _sessionId: string,
     path: string,
     maxDepth: number
 ): Promise<SessionGetDirectoryTreeResponse> {
     try {
-        const request: SessionGetDirectoryTreeRequest = { path, maxDepth };
-        const response = await apiSocket.sessionRPC<SessionGetDirectoryTreeResponse, SessionGetDirectoryTreeRequest>(
-            sessionId,
-            'getDirectoryTree',
-            request
-        );
-        return response;
+        return await sessionRPC<SessionGetDirectoryTreeResponse>('getDirectoryTree', { path, maxDepth });
     } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
 
-/**
- * Run ripgrep in the session
- */
 export async function sessionRipgrep(
-    sessionId: string,
+    _sessionId: string,
     args: string[],
     cwd?: string
 ): Promise<SessionRipgrepResponse> {
     try {
-        const request: SessionRipgrepRequest = { args, cwd };
-        const response = await apiSocket.sessionRPC<SessionRipgrepResponse, SessionRipgrepRequest>(
-            sessionId,
-            'ripgrep',
-            request
-        );
-        return response;
+        return await sessionRPC<SessionRipgrepResponse>('ripgrep', { args, cwd });
     } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
 
-/**
- * Kill the session process immediately
- */
-export async function sessionKill(sessionId: string): Promise<SessionKillResponse> {
+export async function sessionKill(_sessionId: string): Promise<SessionKillResponse> {
     try {
-        const response = await apiSocket.sessionRPC<SessionKillResponse, {}>(
-            sessionId,
-            'killSession',
-            {}
-        );
-        return response;
-    } catch (error) {
-        return {
-            success: false,
-            message: error instanceof Error ? error.message : 'Unknown error'
-        };
-    }
-}
-
-/**
- * Archive a session by deactivating it on the server.
- * Use this when the CLI process is already dead and sessionKill can't reach it.
- */
-export async function sessionArchive(sessionId: string): Promise<{ success: boolean; message?: string }> {
-    try {
-        const response = await apiSocket.request(`/v1/sessions/${sessionId}/archive`, {
-            method: 'POST'
-        });
-        if (!response.ok) {
-            return { success: false, message: `Server error: ${response.status}` };
-        }
-        return { success: true };
+        return await sessionRPC<SessionKillResponse>('killSession', {});
     } catch (error) {
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
 
-/**
- * Permanently delete a session from the server
- * This will remove the session and all its associated data (messages, usage reports, access keys)
- * The session should be inactive/archived before deletion
- */
-export async function sessionDelete(sessionId: string): Promise<{ success: boolean; message?: string }> {
-    try {
-        const response = await apiSocket.request(`/v1/sessions/${sessionId}`, {
-            method: 'DELETE'
-        });
-        
-        if (response.ok) {
-            const result = await response.json();
-            return { success: true };
-        } else {
-            const error = await response.text();
-            return {
-                success: false,
-                message: error || 'Failed to delete session'
-            };
-        }
-    } catch (error) {
-        return {
-            success: false,
-            message: error instanceof Error ? error.message : 'Unknown error'
-        };
-    }
+export async function sessionArchive(_sessionId: string): Promise<{ success: boolean; message?: string }> {
+    return { success: false, message: 'Not supported in direct-connect mode' };
 }
 
-// Export types for external use
-export type {
-    SessionBashRequest,
-    SessionBashResponse,
-    SessionReadFileResponse,
-    SessionWriteFileResponse,
-    SessionListDirectoryResponse,
-    DirectoryEntry,
-    SessionGetDirectoryTreeResponse,
-    TreeNode,
-    SessionRipgrepResponse,
-    SessionKillResponse
-};
+export async function sessionDelete(_sessionId: string): Promise<{ success: boolean; message?: string }> {
+    return { success: false, message: 'Not supported in direct-connect mode' };
+}
+
+// ── Machine operations (not applicable in direct-connect mode) ────────────────
+
+export async function machineSpawnNewSession(_options: SpawnSessionOptions): Promise<SpawnSessionResult> {
+    return { type: 'error', errorMessage: 'Not supported in direct-connect mode' };
+}
+
+export async function machineResumeSession(_options: ResumeSessionOptions): Promise<SpawnSessionResult> {
+    return { type: 'error', errorMessage: 'Not supported in direct-connect mode' };
+}
+
+export async function machineDelete(_machineId: string): Promise<{ success: boolean; message?: string }> {
+    return { success: false, message: 'Not supported in direct-connect mode' };
+}
+
+export async function machineStopDaemon(_machineId: string): Promise<{ message: string }> {
+    return { message: 'Not supported in direct-connect mode' };
+}
+
+export async function machineBash(
+    _machineId: string,
+    _command: string,
+    _cwd: string
+): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+    return { success: false, stdout: '', stderr: 'Not supported in direct-connect mode', exitCode: -1 };
+}
+
+export async function machineUpdateMetadata(
+    _machineId: string,
+    _metadata: MachineMetadata,
+    _expectedVersion: number,
+    _maxRetries: number = 3
+): Promise<{ version: number; metadata: string }> {
+    throw new Error('Not supported in direct-connect mode');
+}

@@ -1,67 +1,25 @@
-import * as z from 'zod';
+// Stub — in-app purchases/RevenueCat removed.
 import type { CustomerInfo } from './revenueCat/types';
 
-//
-// Schema
-//
-
-export const PurchasesSchema = z.object({
-    activeSubscriptions: z.array(z.string()).describe('Active subscription product IDs'),
-    entitlements: z.record(z.string(), z.boolean()).describe('Map of entitlement IDs to their active status'),
-});
-
-//
-// NOTE: Purchases must be a flat object for forward/backward compatibility.
-// The structure follows the same principles as settings:
-// - Simple key-value pairs
-// - No deep nesting
-// - Preserved through schema changes
-//
-
-const PurchasesSchemaPartial = PurchasesSchema.passthrough().partial();
-
-export type Purchases = z.infer<typeof PurchasesSchema>;
-
-//
-// Defaults
-//
-
-export const purchasesDefaults: Purchases = {
-    activeSubscriptions: [],
-    entitlements: {}
-};
-Object.freeze(purchasesDefaults);
-
-//
-// Resolving
-//
-
-export function purchasesParse(purchases: unknown): Purchases {
-    const parsed = PurchasesSchemaPartial.safeParse(purchases);
-    if (!parsed.success) {
-        return { ...purchasesDefaults };
-    }
-    return { ...purchasesDefaults, ...parsed.data };
+export interface Purchases {
+    entitlements: Record<string, boolean>;
+    originalAppUserId?: string;
 }
 
-//
-// Transform CustomerInfo to Purchases
-//
+export const purchasesDefaults: Purchases = {
+    entitlements: {},
+};
 
-export function customerInfoToPurchases(customerInfo: CustomerInfo): Purchases {
-    // Extract active subscription product IDs
-    // activeSubscriptions is a record of product ID to subscription info
-    const activeSubscriptions = Object.keys(customerInfo.activeSubscriptions || {});
-
-    // Extract entitlements (entitlement_id -> isActive)
-    const entitlements: Record<string, boolean> = {};
-    const allEntitlements = customerInfo.entitlements?.all || {};
-    Object.entries(allEntitlements).forEach(([id, entitlement]) => {
-        entitlements[id] = entitlement.isActive;
-    });
-
+export function purchasesParse(raw: unknown): Purchases {
+    if (!raw || typeof raw !== 'object') return { ...purchasesDefaults };
+    const r = raw as Record<string, unknown>;
     return {
-        activeSubscriptions,
-        entitlements
+        entitlements: typeof r.entitlements === 'object' && r.entitlements !== null
+            ? (r.entitlements as Record<string, boolean>)
+            : {},
     };
+}
+
+export function customerInfoToPurchases(_customerInfo: CustomerInfo): Purchases {
+    return { ...purchasesDefaults };
 }

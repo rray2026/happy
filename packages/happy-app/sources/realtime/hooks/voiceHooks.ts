@@ -1,4 +1,4 @@
-// Voice/realtime feature removed — stubs keep dependent code compiling.
+// Stub — voice/realtime feature removed.
 
 export const voiceHooks = {
     onSessionFocus: (_sessionId: string, _metadata?: unknown) => {},

@@ -1,95 +1,44 @@
-import * as z from 'zod';
+// Stub — server-side user profile removed.
 
-//
-// Schema
-//
-
-export const GitHubProfileSchema = z.object({
-    id: z.number(),
-    login: z.string(),
-    name: z.string(),
-    avatar_url: z.string(),
-    email: z.string().optional(),
-    bio: z.string().nullable()
-});
-
-export const ImageRefSchema = z.object({
-    width: z.number(),
-    height: z.number(),
-    thumbhash: z.string(),
-    path: z.string(),
-    url: z.string()
-});
-
-export const ProfileSchema = z.object({
-    id: z.string(),
-    timestamp: z.number(),
-    firstName: z.string().nullable(),
-    lastName: z.string().nullable(),
-    avatar: ImageRefSchema.nullable(),
-    github: GitHubProfileSchema.nullable(),
-    connectedServices: z.array(z.string()).default([])
-});
-
-export type GitHubProfile = z.infer<typeof GitHubProfileSchema>;
-export type ImageRef = z.infer<typeof ImageRefSchema>;
-export type Profile = z.infer<typeof ProfileSchema>;
-
-//
-// Defaults
-//
+export interface Profile {
+    id: string;
+    firstName?: string;
+    lastName?: string;
+    username?: string;
+    bio?: string;
+    avatar?: { thumbhash?: string; url?: string } | null;
+    github?: { login: string } | null;
+}
 
 export const profileDefaults: Profile = {
     id: '',
-    timestamp: 0,
-    firstName: null,
-    lastName: null,
-    avatar: null,
-    github: null,
-    connectedServices: []
 };
-Object.freeze(profileDefaults);
 
-//
-// Parsing
-//
-
-export function profileParse(profile: unknown): Profile {
-    const parsed = ProfileSchema.safeParse(profile);
-    if (!parsed.success) {
-        console.error('Failed to parse profile:', parsed.error);
-        return { ...profileDefaults };
-    }
-    return parsed.data;
+export function profileParse(raw: unknown): Profile {
+    if (!raw || typeof raw !== 'object') return { ...profileDefaults };
+    const r = raw as Record<string, unknown>;
+    return {
+        id: typeof r.id === 'string' ? r.id : '',
+        firstName: typeof r.firstName === 'string' ? r.firstName : undefined,
+        lastName: typeof r.lastName === 'string' ? r.lastName : undefined,
+        username: typeof r.username === 'string' ? r.username : undefined,
+        bio: typeof r.bio === 'string' ? r.bio : undefined,
+        avatar: r.avatar as Profile['avatar'] ?? null,
+        github: r.github as Profile['github'] ?? null,
+    };
 }
 
-//
-// Utility functions
-//
-
-export function getDisplayName(profile: Profile): string | null {
+export function getDisplayName(profile: Profile): string {
     if (profile.firstName || profile.lastName) {
         return [profile.firstName, profile.lastName].filter(Boolean).join(' ');
     }
-    if (profile.github?.name) {
-        return profile.github.name;
-    }
-    if (profile.github?.login) {
-        return profile.github.login;
-    }
-    return null;
+    return profile.username ?? profile.id ?? '';
 }
 
 export function getAvatarUrl(profile: Profile): string | null {
-    if (profile.avatar?.url) {
-        return profile.avatar.url;
-    }
-    if (profile.github?.avatar_url) {
-        return profile.github.avatar_url;
-    }
-    return null;
+    return profile.avatar?.url ?? null;
 }
 
 export function getBio(profile: Profile): string | null {
-    return profile.github?.bio || null;
+    return profile.bio ?? null;
 }
