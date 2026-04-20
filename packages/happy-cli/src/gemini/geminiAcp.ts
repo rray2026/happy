@@ -140,12 +140,14 @@ export class GeminiAcpSession {
     private readonly apiKey: string | undefined;
     private readonly onPermissionRequest: PermissionRequestFn | undefined;
     private readonly resumeSessionId: string | undefined;
+    private readonly model: string | undefined;
 
-    constructor(opts: { broadcast: BroadcastFn; apiKey?: string; onPermissionRequest?: PermissionRequestFn; resumeSessionId?: string }) {
+    constructor(opts: { broadcast: BroadcastFn; apiKey?: string; onPermissionRequest?: PermissionRequestFn; resumeSessionId?: string; model?: string }) {
         this.broadcast = opts.broadcast;
         this.apiKey = opts.apiKey;
         this.onPermissionRequest = opts.onPermissionRequest;
         this.resumeSessionId = opts.resumeSessionId;
+        this.model = opts.model;
     }
 
     // ── Public ────────────────────────────────────────────────────────────────
@@ -190,9 +192,10 @@ export class GeminiAcpSession {
             env.GOOGLE_API_KEY = this.apiKey;
         }
 
-        logger.debug('[GeminiAcp] spawning gemini --experimental-acp');
+        const spawnArgs = ['--experimental-acp', ...(this.model ? ['-m', this.model] : [])];
+        logger.debug('[GeminiAcp] spawning gemini', spawnArgs.join(' '));
 
-        const proc = spawn('gemini', ['--experimental-acp'], {
+        const proc = spawn('gemini', spawnArgs, {
             cwd: process.cwd(),
             env,
             stdio: ['pipe', 'pipe', 'pipe'],

@@ -22,10 +22,13 @@ interface ServeOptions {
     agentArgs: string[];
     /** Gemini API key (GEMINI_API_KEY env, or GOOGLE_API_KEY env) */
     geminiApiKey: string | undefined;
+    /** Gemini model override (e.g. gemini-2.5-flash) */
+    geminiModel: string | undefined;
 }
 
 function parseArgs(args: string[]): ServeOptions {
     let agent: AgentType = 'claude';
+    let geminiModel: string | undefined;
     const agentArgs: string[] = [];
 
     for (let i = 0; i < args.length; i++) {
@@ -34,6 +37,8 @@ function parseArgs(args: string[]): ServeOptions {
             agent = 'claude';
         } else if (arg === '--gemini') {
             agent = 'gemini';
+        } else if ((arg === '--model' || arg === '-m') && i + 1 < args.length) {
+            geminiModel = args[++i];
         } else {
             agentArgs.push(arg);
         }
@@ -46,7 +51,7 @@ function parseArgs(args: string[]): ServeOptions {
     const geminiApiKey =
         process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
 
-    return { agent, port, endpoint, agentArgs, geminiApiKey };
+    return { agent, port, endpoint, agentArgs, geminiApiKey, geminiModel };
 }
 
 interface ServeState {
@@ -181,6 +186,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
             broadcast: (e) => server.broadcast(e),
             apiKey: opts.geminiApiKey,
             resumeSessionId: serveState?.geminiSessionId,
+            model: opts.geminiModel,
         })
         : null;
 
@@ -288,7 +294,8 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     // ── Display QR code ──────────────────────────────────────────────────────
     const qrJson = JSON.stringify(qrPayload);
     console.log(chalk.bold('\n🚀 Happy Direct Connect'));
-    console.log(chalk.dim(`Agent: ${opts.agent}  |  Port: ${opts.port}`));
+    const modelLabel = opts.geminiModel ? `  |  Model: ${opts.geminiModel}` : '';
+    console.log(chalk.dim(`Agent: ${opts.agent}${modelLabel}  |  Port: ${opts.port}`));
     console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
     displayQRCode(qrJson);
     console.log(chalk.yellow('\nScan the QR code with the Happy webapp to connect.'));
