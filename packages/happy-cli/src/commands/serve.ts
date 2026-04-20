@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import chalk from 'chalk';
 import { displayQRCode } from '@/ui/qrcode';
 import { logger } from '@/ui/logger';
 import { generateCliKeys, buildQRPayload } from '@/server/directAuth';
 import { startWsServer } from '@/server/wsServer';
 import { GeminiAcpSession } from '@/gemini/geminiAcp';
+import { configuration } from '@/configuration';
 
 /** Supported agent types for `happy serve` */
 type AgentType = 'claude' | 'gemini';
@@ -46,6 +48,31 @@ function parseArgs(args: string[]): ServeOptions {
         process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
 
     return { agent, port, endpoint, agentArgs, geminiApiKey };
+}
+
+interface ServeState {
+    geminiSessionId?: string;
+    cwd: string;
+}
+
+function loadServeState(): ServeState | null {
+    const path = join(configuration.happyHomeDir, 'serve-state.json');
+    try {
+        if (!existsSync(path)) return null;
+        const parsed = JSON.parse(readFileSync(path, 'utf8')) as ServeState;
+        return parsed.cwd === process.cwd() ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function saveServeState(state: ServeState): void {
+    const path = join(configuration.happyHomeDir, 'serve-state.json');
+    try {
+        writeFileSync(path, JSON.stringify(state), 'utf8');
+    } catch (err) {
+        logger.debug('[serve] Failed to save serve state:', (err as Error).message);
+    }
 }
 
 /**
@@ -135,6 +162,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     const cliKeys = generateCliKeys();
     const qrPayload = buildQRPayload(opts.endpoint, cliKeys, sessionId);
 
+    // ── Persisted serve state (Gemini session resume) ────────────────────────
+    const serveState = loadServeState();
+    if (serveState?.geminiSessionId) {
+        logger.debug('[serve] Found previous Gemini session:', serveState.geminiSessionId);
+    }
+
     // ── Claude state ────────────────────────────────────────────────────────
     let claudeSessionId: string | null = null;
     let claudeRunning = false;
@@ -148,6 +181,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
         ? new GeminiAcpSession({
             broadcast: (e) => server.broadcast(e),
             apiKey: opts.geminiApiKey,
+            resumeSessionId: serveState?.geminiSessionId,
             onPermissionRequest: (permissionId, toolName, input) => {
                 return new Promise<boolean>((resolve) => {
                     permissionPending.set(permissionId, resolve);
@@ -168,6 +202,10 @@ export async function handleServeCommand(args: string[]): Promise<void> {
             claudeRunning = true;
             try {
                 await geminiSession.sendPrompt(text);
+                const gid = geminiSession.getSessionId();
+                if (gid) {
+                    saveServeState({ geminiSessionId: gid, cwd: process.cwd() });
+                }
                 server.broadcast({ type: 'result', subtype: 'success', result: 'Done' });
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
