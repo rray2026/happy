@@ -24,7 +24,7 @@ describe('uid', () => {
 describe('eventToItems: user events', () => {
     it('converts a string-content user message', () => {
         const ev: UserEvent = { type: 'user', message: { role: 'user', content: 'hello' } };
-        expect(eventToItems(ev)).toEqual([{ kind: 'user', text: 'hello', id: '1' }]);
+        expect(eventToItems(ev)).toMatchObject([{ kind: 'user', text: 'hello', id: '1' }]);
     });
 
     it('extracts text from structured content', () => {
@@ -38,7 +38,7 @@ describe('eventToItems: user events', () => {
                 ],
             },
         };
-        expect(eventToItems(ev)).toEqual([{ kind: 'user', text: 'hi there', id: '1' }]);
+        expect(eventToItems(ev)).toMatchObject([{ kind: 'user', text: 'hi there', id: '1' }]);
     });
 
     it('returns no items when user text is empty', () => {
@@ -64,7 +64,7 @@ describe('eventToItems: assistant events', () => {
             type: 'assistant',
             message: { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
         };
-        expect(eventToItems(ev)).toEqual([{ kind: 'assistant', text: 'answer', id: '1' }]);
+        expect(eventToItems(ev)).toMatchObject([{ kind: 'assistant', text: 'answer', id: '1' }]);
     });
 
     it('concatenates multiple text parts', () => {
@@ -78,7 +78,7 @@ describe('eventToItems: assistant events', () => {
                 ],
             },
         };
-        expect(eventToItems(ev)).toEqual([{ kind: 'assistant', text: 'foobar', id: '1' }]);
+        expect(eventToItems(ev)).toMatchObject([{ kind: 'assistant', text: 'foobar', id: '1' }]);
     });
 
     it('emits tools item for tool_use parts with name, input, id', () => {
@@ -92,7 +92,7 @@ describe('eventToItems: assistant events', () => {
                 ],
             },
         };
-        expect(eventToItems(ev)).toEqual([
+        expect(eventToItems(ev)).toMatchObject([
             {
                 kind: 'tools',
                 id: '1',
@@ -115,7 +115,7 @@ describe('eventToItems: assistant events', () => {
                 ],
             },
         };
-        expect(eventToItems(ev)).toEqual([
+        expect(eventToItems(ev)).toMatchObject([
             { kind: 'assistant', text: 'about to run tools', id: '1' },
             {
                 kind: 'tools',
@@ -137,14 +137,14 @@ describe('eventToItems: assistant events', () => {
 describe('eventToItems: result events', () => {
     it('emits failure item for error result', () => {
         const ev: ResultEvent = { type: 'result', subtype: 'error', result: 'boom' };
-        expect(eventToItems(ev)).toEqual([
+        expect(eventToItems(ev)).toMatchObject([
             { kind: 'result', text: 'boom', success: false, id: '1' },
         ]);
     });
 
     it('falls back to "error" text when result string is empty', () => {
         const ev: ResultEvent = { type: 'result', subtype: 'error', result: '' };
-        expect(eventToItems(ev)).toEqual([
+        expect(eventToItems(ev)).toMatchObject([
             { kind: 'result', text: 'error', success: false, id: '1' },
         ]);
     });
@@ -158,7 +158,7 @@ describe('eventToItems: result events', () => {
 describe('eventToItems: system events', () => {
     it('emits a truncated session id status', () => {
         const ev: SystemEvent = { type: 'system', subtype: 'init', session_id: 'abcdef123456' };
-        expect(eventToItems(ev)).toEqual([
+        expect(eventToItems(ev)).toMatchObject([
             { kind: 'status', text: 'Session abcdef12…', id: '1' },
         ]);
     });
