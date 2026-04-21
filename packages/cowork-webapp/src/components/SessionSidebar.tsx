@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Plus, X } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { uid } from '../session/events';
@@ -8,18 +9,12 @@ import { NewSessionModal } from './NewSessionModal';
 
 interface Props {
     activeSessionId: string | null;
-    /** When true on mobile (≤768px), sidebar slides in from the left. */
     drawerOpen?: boolean;
-    /** Called when the drawer should close (e.g. user picked an item). */
     onCloseDrawer?: () => void;
 }
 
 type PendingClose = { sessionId: string; label: string };
 
-/**
- * Left-hand list of chat sessions on the current connection. Creates / closes
- * sessions via RPC; the list stays in sync through `sessionClient.onSessionsChange`.
- */
 export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDrawer }: Props) {
     const navigate = useNavigate();
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
@@ -34,9 +29,7 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
     }, [navigate, onCloseDrawer]);
 
     const handleSessionCreated = useCallback(
-        (s: ChatSessionMeta) => {
-            goto(`/chat/${s.id}`);
-        },
+        (s: ChatSessionMeta) => { goto(`/sessions/${s.id}`); },
         [goto],
     );
 
@@ -47,15 +40,12 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
         await sessionClient.rpc(uid(), 'session.close', { sessionId });
         if (sessionId === activeSessionId) {
             const remaining = sessionClient.getSessions().filter((s) => s.id !== sessionId);
-            goto(remaining[0] ? `/chat/${remaining[0].id}` : '/chat');
+            goto(remaining[0] ? `/sessions/${remaining[0].id}` : '/sessions');
         }
     }, [pendingClose, activeSessionId, goto]);
 
     const requestClose = useCallback((s: ChatSessionMeta) => {
-        setPendingClose({
-            sessionId: s.id,
-            label: `${s.tool} · ${s.id.slice(0, 8)}`,
-        });
+        setPendingClose({ sessionId: s.id, label: `${s.tool} · ${s.id.slice(0, 8)}` });
     }, []);
 
     return (
@@ -69,11 +59,11 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                     {onCloseDrawer && (
                         <button
                             type="button"
-                            className="icon-btn chat-header-menu-btn"
+                            className="icon-btn"
                             onClick={onCloseDrawer}
                             aria-label="关闭会话列表"
                         >
-                            ✕
+                            <X size={18} />
                         </button>
                     )}
                 </div>
@@ -85,12 +75,12 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                     {sessions.map((s) => (
                         <div
                             key={s.id}
-                            className={`sidebar-item ${s.id === activeSessionId ? 'active' : ''}`}
+                            className={`sidebar-item${s.id === activeSessionId ? ' active' : ''}`}
                         >
                             <button
                                 type="button"
                                 className="sidebar-item-main"
-                                onClick={() => goto(`/chat/${s.id}`)}
+                                onClick={() => goto(`/sessions/${s.id}`)}
                             >
                                 <span className={`sidebar-tool tool-${s.tool}`}>{s.tool}</span>
                                 <span className="sidebar-id">{s.id.slice(0, 8)}</span>
@@ -103,7 +93,7 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                                 aria-label={`关闭会话 ${s.id.slice(0, 8)}`}
                                 title="关闭会话"
                             >
-                                ✕
+                                <X size={14} />
                             </button>
                         </div>
                     ))}
@@ -115,7 +105,8 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                         className="btn btn-primary btn-block"
                         onClick={() => setNewSessionOpen(true)}
                     >
-                        + 新建会话
+                        <Plus size={16} />
+                        新建会话
                     </button>
                 </div>
             </aside>
@@ -140,24 +131,15 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                         <p className="confirm-hint">{pendingClose.label}</p>
                     )}
                     <div className="modal-actions">
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={() => setPendingClose(null)}
-                        >
+                        <button type="button" className="btn btn-secondary" onClick={() => setPendingClose(null)}>
                             取消
                         </button>
-                        <button
-                            type="button"
-                            className="btn btn-danger"
-                            onClick={confirmClose}
-                        >
+                        <button type="button" className="btn btn-danger" onClick={confirmClose}>
                             关闭会话
                         </button>
                     </div>
                 </div>
             </Modal>
-
         </>
     );
 }

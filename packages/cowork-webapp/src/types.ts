@@ -82,8 +82,8 @@ export interface ToolCall {
 }
 
 export type Item =
-    | { kind: 'user'; text: string; id: string }
-    | { kind: 'assistant'; text: string; id: string; streaming?: boolean }
-    | { kind: 'tools'; calls: ToolCall[]; id: string }
-    | { kind: 'result'; text: string; success: boolean; id: string }
-    | { kind: 'status'; text: string; id: string };
+    | { kind: 'user'; text: string; id: string; timestamp?: number }
+    | { kind: 'assistant'; text: string; id: string; streaming?: boolean; timestamp?: number }
+    | { kind: 'tools'; calls: ToolCall[]; id: string; timestamp?: number }
+    | { kind: 'result'; text: string; success: boolean; id: string; timestamp?: number }
+    | { kind: 'status'; text: string; id: string; timestamp?: number };

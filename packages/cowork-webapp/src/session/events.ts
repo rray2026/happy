@@ -23,13 +23,14 @@ export function __resetUidForTests(): void {
  * Convert an incoming Claude event into zero or more UI display items.
  */
 export function eventToItems(event: ClaudeEvent): Item[] {
+    const ts = Date.now();
     switch (event.type) {
         case 'user': {
             const e = event as UserEvent;
             const text = typeof e.message.content === 'string'
                 ? e.message.content
                 : (e.message.content.find((p): p is TextPart => p.type === 'text')?.text ?? '');
-            return text ? [{ kind: 'user', text, id: uid() }] : [];
+            return text ? [{ kind: 'user', text, id: uid(), timestamp: ts }] : [];
         }
         case 'assistant': {
             const e = event as AssistantEvent;
@@ -41,26 +42,26 @@ export function eventToItems(event: ClaudeEvent): Item[] {
             if (e._delta && e._streamId && e.message) {
                 const text = e.message.content.filter((p): p is TextPart => p.type === 'text').map(p => p.text).join('');
                 if (!text) return [];
-                return [{ kind: 'assistant', text, id: e._streamId, streaming: true }];
+                return [{ kind: 'assistant', text, id: e._streamId, streaming: true, timestamp: ts }];
             }
             // Non-streaming path (Claude, or tool-only assistant events from Gemini).
             const items: Item[] = [];
             const content = e.message?.content ?? [];
             const text = content.filter((p): p is TextPart => p.type === 'text').map(p => p.text).join('');
-            if (text) items.push({ kind: 'assistant', text, id: uid() });
+            if (text) items.push({ kind: 'assistant', text, id: uid(), timestamp: ts });
             const calls = content
                 .filter((p): p is ToolUsePart => p.type === 'tool_use')
                 .map((p) => ({ name: p.name, input: p.input, toolUseId: p.id }));
-            if (calls.length) items.push({ kind: 'tools', calls, id: uid() });
+            if (calls.length) items.push({ kind: 'tools', calls, id: uid(), timestamp: ts });
             return items;
         }
         case 'result': {
             const e = event as ResultEvent;
-            return e.subtype === 'error' ? [{ kind: 'result', text: e.result || 'error', success: false, id: uid() }] : [];
+            return e.subtype === 'error' ? [{ kind: 'result', text: e.result || 'error', success: false, id: uid(), timestamp: ts }] : [];
         }
         case 'system': {
             const e = event as SystemEvent;
-            return e.session_id ? [{ kind: 'status', text: `Session ${e.session_id.slice(0, 8)}…`, id: uid() }] : [];
+            return e.session_id ? [{ kind: 'status', text: `Session ${e.session_id.slice(0, 8)}…`, id: uid(), timestamp: ts }] : [];
         }
         default:
             return [];
