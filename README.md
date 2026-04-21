@@ -1,137 +1,110 @@
-# cowork
+# Cowork
 
-本地跑 Claude Code / Gemini CLI，浏览器里用它们。一次 QR 扫码完成配对，之后点对点 WebSocket 直连，数据不经云端中转。
+在浏览器里使用本机跑的 **Claude Code** 或 **Gemini CLI**。一次 QR 扫码完成配对，之后点对点 WebSocket 直连，你的对话和文件内容 **不经云端中转**。
 
-Fork 自 [happy-coder/happy](https://github.com/happy-coder/happy)（MIT），精简为直连场景专用版本。
+同一套 webapp 同时支持桌面端和手机端；在手机上也能连回家里那台开发机的 CLI。
 
-## 两个包
+Fork 自 [happy-coder/happy](https://github.com/happy-coder/happy)（MIT），精简为"直连场景专用"。
 
-| 包 | 作用 | 运行位置 |
+## 它怎么工作
+
+| 组件 | 运行位置 | 作用 |
 |---|---|---|
-| [`cowork-agent`](packages/cowork-agent) | Node 进程，桥接 Claude/Gemini CLI 与 WebSocket；启动时显示 QR | 你的开发机 |
-| [`cowork-webapp`](packages/cowork-webapp) | React + Vite 浏览器 UI，通过 QR 配对后直连 agent | 浏览器（localhost 或 Cloudflare Pages） |
+| [`cowork-agent`](packages/cowork-agent) | **你的开发机** | 本地 Node 进程，把 Claude/Gemini CLI 包进 WebSocket；启动时打印 QR |
+| [`cowork-webapp`](packages/cowork-webapp) | **任意浏览器** | 桌面或手机浏览器，扫码配对后直连 agent |
 
-配对流程：agent 生成 Ed25519 密钥对 + 一次性 nonce（5 分钟失效）→ 终端打印 QR → webapp 扫码完成握手 → agent 签发 30 天 session credential，后续重连免扫码。
+配对流程：agent 生成一次性 nonce（5 分钟失效）→ 打印 QR → webapp 扫码 → agent 签发 30 天 session credential → 之后同一浏览器自动重连。
 
 ## 快速开始
 
-前置：Node ≥ 20、pnpm 10、Claude Code CLI（`claude`）或 Gemini CLI（`gemini`）在 `PATH` 中。
+前置：Node ≥ 20、pnpm 10、以及 `claude`（Claude Code）或 `gemini`（Gemini CLI）在 `PATH` 里。
+
+### 1. 装 agent
+
+最常见的做法：从源码构建，软链到全局命令。
 
 ```bash
+git clone https://github.com/rray2026/happy.git cowork && cd cowork
 pnpm install
-```
-
-### 启动 agent
-
-```bash
-# Claude Code（默认）
-pnpm --filter cowork-agent dev
-
-# Gemini CLI
-pnpm --filter cowork-agent dev -- --gemini
-
-# 指定模型
-pnpm --filter cowork-agent dev -- --gemini -m gemini-2.5-pro
-```
-
-终端会打印 QR（文本二维码）和 JSON payload。
-
-### 启动 webapp
-
-另起一个终端：
-
-```bash
-pnpm --filter cowork-webapp dev
-# 打开 http://localhost:5173
-```
-
-首页粘贴 agent 终端输出的 JSON payload（或扫描 QR），点击连接即可。30 天内同一浏览器自动重连。
-
-## 本地安装 agent（可选）
-
-把 `cowork-agent` 装到本机后，可以在任意目录直接跑 `cowork-agent`，不用每次都 `cd` 进仓库执行 `pnpm --filter`。
-
-### 方式一：pnpm link（推荐，开发时保持源码同步）
-
-```bash
-# 0. 首次使用 pnpm 全局安装需先初始化全局 bin 目录
-#    （只做一次；已做过可跳过。报 ERR_PNPM_NO_GLOBAL_BIN_DIR 时执行此步）
-pnpm setup
-source ~/.zshrc   # bash 用户改成 ~/.bashrc；或新开一个终端
-
-# 1. 仓库根目录 install 拉依赖
-pnpm install
-
-# 2. 构建 dist/（bin 会优先跑编译产物；缺 dist 时才回退到 tsx）
 pnpm --filter cowork-agent build
 
-# 3. 进到 agent 包目录把它软链到全局
-cd packages/cowork-agent
-pnpm link --global
+# 首次用 pnpm 全局命令需先初始化 bin 目录（做过一次就跳过）
+pnpm setup && source ~/.zshrc    # bash 用户改 ~/.bashrc
 
-# 4. 验证
-cowork-agent --help
+cd packages/cowork-agent && pnpm link --global
+cowork-agent --help               # 验证
 ```
 
-源码改动后重新 `pnpm --filter cowork-agent build` 即可生效，link 不需要重做。卸载：`pnpm uninstall --global cowork-agent`。
+也可以直接下载 CI 打好的 tarball：到 [Actions](https://github.com/rray2026/happy/actions/workflows/pack-agent.yml) 的最新成功 run 里下 `cowork-agent` artifact，然后 `npm install -g ./cowork-agent-*.tgz`。
 
-### 方式二：打 tarball 后全局安装（脱离仓库使用）
+> 更多安装与开发细节见 [docs/development.md](docs/development.md)。
 
-```bash
-pnpm --filter cowork-agent build
-pnpm --filter cowork-agent pack --pack-destination /tmp/cowork-agent
-
-# 用 npm 或 pnpm 全局装（任选其一）
-npm install -g /tmp/cowork-agent/cowork-agent-*.tgz
-# 或 pnpm add -g /tmp/cowork-agent/cowork-agent-*.tgz
-```
-
-CI 的 [pack-agent.yml](.github/workflows/pack-agent.yml) 会在 `main` 推送时自动产出同样的 tarball，可以直接从 Actions artifact 下载后 `npm install -g ./cowork-agent-*.tgz`。
-
-### 安装后的使用
+### 2. 启动 agent
 
 ```bash
-cowork-agent                        # Claude Code（默认）
-cowork-agent --gemini               # Gemini CLI
+cowork-agent                          # Claude Code（默认）
+cowork-agent --gemini                 # 换成 Gemini
 cowork-agent --gemini -m gemini-2.5-pro
 ```
 
-环境变量（见下一节）照常生效。`claude` 或 `gemini` CLI 必须仍在 `PATH` 中。
+终端会打印 QR（文本二维码）和等价的 JSON payload。保持这个进程开着。
 
-## 环境变量（agent）
+### 3. 打开 webapp
+
+- **最简单**：直接跑本地 webapp
+  ```bash
+  pnpm --filter cowork-webapp dev
+  # 浏览器打开 http://localhost:5173
+  ```
+- **自部署**：webapp 是纯静态页面，构建后（`pnpm --filter cowork-webapp build`）的 `dist/` 可以扔到任何静态托管（Cloudflare Pages、Netlify、GitHub Pages、自己的 nginx）
+
+### 4. 配对
+
+- 桌面浏览器：把 agent 终端里那段 JSON payload 粘贴到首页 → 点「新建连接」
+- 手机：用相机 / 二维码 App 扫描终端里的 QR，打开 webapp 链接，粘贴自动带入
+
+首次配对成功后，30 天内同一浏览器打开即自动恢复，**不用再扫码**。
+
+## 配置：环境变量
+
+下列环境变量在启动 `cowork-agent` 前 `export` 即可生效：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `COWORK_AGENT_PORT` | `4000` | WebSocket 监听端口 |
-| `COWORK_AGENT_BIND` | `127.0.0.1` | 绑定网卡。改成 `0.0.0.0` 让 LAN 其他设备可连 |
-| `COWORK_AGENT_ENDPOINT` | `ws://localhost:4000` | 写进 QR 的连接地址（webapp 连的就是这个） |
-| `COWORK_AGENT_HOME` | `~/.cowork-agent` | 密钥与日志目录（密钥文件权限 `0600`） |
-| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | 传给 `gemini` CLI，可选 |
+| `COWORK_AGENT_BIND` | `127.0.0.1` | 绑定网卡。跨设备使用改成 `0.0.0.0` |
+| `COWORK_AGENT_ENDPOINT` | `ws://localhost:4000` | 写进 QR 的地址。**webapp 会连的就是这个** |
+| `COWORK_AGENT_HOME` | `~/.cowork-agent` | 密钥与日志目录（私钥文件 `0600` 权限） |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | 传给 `gemini` CLI |
 
-安全默认：**只绑 `127.0.0.1`**。需要手机 / 平板跨设备连接时才 `export COWORK_AGENT_BIND=0.0.0.0` 并手动设置 `COWORK_AGENT_ENDPOINT=ws://<你的LAN-IP>:4000`。
+### 在手机 / 平板上用
 
-## 开发
+默认 agent 只绑 `127.0.0.1`（安全默认，只有本机能连）。要让手机通过 WiFi 连上：
 
 ```bash
-# 类型检查两个包
-pnpm --filter cowork-agent --filter cowork-webapp run typecheck
+# 先查本机在 LAN 的 IP（macOS）
+ipconfig getifaddr en0
 
-# 跑全部测试（vitest）
-pnpm --filter cowork-agent --filter cowork-webapp run test
-
-# 生产构建
-pnpm --filter cowork-agent build
-pnpm --filter cowork-webapp build
+export COWORK_AGENT_BIND=0.0.0.0
+export COWORK_AGENT_ENDPOINT=ws://<你的LAN-IP>:4000
+cowork-agent
 ```
 
-GitHub Actions：
-- [`pack-agent.yml`](.github/workflows/pack-agent.yml)：PR / push 时 typecheck + test + build + 打 tarball
-- [`deploy-cloudflare-pages.yml`](.github/workflows/deploy-cloudflare-pages.yml)：`main` 分支变更时部署 webapp 到 Cloudflare Pages
+webapp 可以用 Cloudflare Pages 部署的公网版本（或本机 `localhost:5173`，手机同 WiFi 改成 `<你的LAN-IP>:5173`）。
 
-## 协议文档
+> **安全提示**：agent 所有连接都用 Ed25519 签名认证，但 LAN 内任何能访问你机器端口的人如果拿到 QR payload 就能配对。QR nonce 5 分钟自动过期，之后只有保存了 session credential 的浏览器能继续用。
 
-- [docs/protocol.md](docs/protocol.md) — 协议总览：握手、重连、QR payload、心跳、RPC、Delta Sync、认证
-- [docs/messages.md](docs/messages.md) — 每条消息的字段语义、校验规则、JSON 示例
+## 常见问题
+
+- **"QR code 已过期"** — nonce 只有 5 分钟窗口。重启 agent 再扫。
+- **"invalid credential"** — 换了机器或清空了 `~/.cowork-agent`，旧浏览器里保存的凭证不再有效。点「忘记」重新配对，或者用 webapp 首页的「Session 迁移」从旧浏览器导出凭证 JSON 再粘贴到新浏览器。
+- **手机连不上** — 检查：① agent 是否 `BIND=0.0.0.0`；② `COWORK_AGENT_ENDPOINT` 是否用了 LAN IP；③ 防火墙是否放行 4000 端口；④ 手机和电脑是否同一 WiFi。
+
+## 更多文档
+
+- [docs/development.md](docs/development.md) — 从源码构建、测试、CI、打包
+- [docs/protocol.md](docs/protocol.md) — 协议总览：握手、重连、心跳、RPC、Delta Sync、认证
+- [docs/messages.md](docs/messages.md) — 每条消息的字段、校验规则、JSON 示例
 
 ## License
 
