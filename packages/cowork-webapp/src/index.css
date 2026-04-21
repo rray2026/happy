@@ -2034,6 +2034,49 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .home-status-label { font-size: var(--fs-sm); color: var(--text-secondary); }
 
+.home-actions {
+  display: flex;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+.home-action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-5);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  color: var(--text-primary);
+  min-width: 110px;
+  transition: background var(--t-fast), opacity var(--t-fast);
+  position: relative;
+}
+.home-action-btn:hover:not(:disabled) { background: var(--surface-hover); }
+.home-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.home-action-icon { color: var(--accent); }
+.home-action-label { font-size: var(--fs-sm); font-weight: 500; }
+
+.home-action-badge {
+  position: absolute;
+  top: var(--s-2);
+  right: var(--s-2);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--r-full);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
