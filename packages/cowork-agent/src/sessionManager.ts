@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { runClaudeProcess } from './claudeProcess.js';
+import { isInsideRoot } from './fsBrowser.js';
 import { GeminiAcpSession } from './geminiAcp.js';
 import { logger } from './logger.js';
 import type { PersistedSession } from './sessionStorage.js';
@@ -71,6 +73,13 @@ export interface CreateSessionParams {
     tool: Tool;
     model?: string;
     agentArgs?: string[];
+    /**
+     * Absolute path for this session's working directory. Must sit inside the
+     * agent root (`opts.cwd`). Defaults to the agent root when unset. The
+     * caller (serve.ts) is expected to have resolved + sandbox-checked this
+     * already; SessionManager enforces the containment invariant too.
+     */
+    cwd?: string;
 }
 
 /**
@@ -98,17 +107,23 @@ export class SessionManager {
     }
 
     create(params: CreateSessionParams): SessionMeta {
+        const cwd = params.cwd ?? this.opts.cwd;
+        if (!this.isCwdInsideRoot(cwd)) {
+            throw new Error('cwd escapes agent root');
+        }
         const entry = this.buildEntry({
             id: randomUUID(),
             tool: params.tool,
             model: params.model,
-            cwd: this.opts.cwd,
+            cwd,
             createdAt: Date.now(),
             agentArgs: params.agentArgs ?? [],
             claudeSessionId: null,
             geminiSessionId: null,
         });
-        logger.debug(`[sessionManager] created ${entry.id} tool=${entry.tool}`);
+        logger.debug(
+            `[sessionManager] created ${entry.id} tool=${entry.tool} cwd=${entry.cwd}`,
+        );
         this.persistEntry(entry);
         this.emitSessionsChanged();
         return this.toMeta(entry);
@@ -131,8 +146,10 @@ export class SessionManager {
                 continue;
             }
             // Caller filtered by cwd already, but double-check: a stale file
-            // could otherwise slip in and poison Claude's `--resume`.
-            if (p.cwd !== this.opts.cwd) continue;
+            // could otherwise slip in and poison Claude's `--resume`. Per-
+            // session cwds may be any subdirectory of the agent root, so the
+            // check is containment, not equality.
+            if (!this.isCwdInsideRoot(p.cwd)) continue;
             const entry = this.buildEntry(p);
             logger.debug(
                 `[sessionManager] rehydrated ${entry.id} tool=${entry.tool}` +
@@ -331,6 +348,25 @@ export class SessionManager {
             claudeSessionId: entry.claudeSessionId,
             geminiSessionId: entry.geminiSessionId,
         });
+    }
+
+    /**
+     * Containment check used by both `create` (validate incoming) and
+     * `rehydrate` (validate persisted). Both paths are realpath-resolved
+     * when possible so a symlinked session cwd passes/fails consistently
+     * with the caller-side sandbox check in `resolveRelPath`. If a path
+     * can't be realpathed (non-existent, unit-test fixture) we fall back
+     * to the raw string — containment is still string-prefixed.
+     */
+    private isCwdInsideRoot(cwd: string): boolean {
+        const safeRealpath = (p: string): string => {
+            try {
+                return realpathSync(p);
+            } catch {
+                return p;
+            }
+        };
+        return isInsideRoot(safeRealpath(this.opts.cwd), safeRealpath(cwd));
     }
 
     private toMeta(e: SessionEntry): SessionMeta {

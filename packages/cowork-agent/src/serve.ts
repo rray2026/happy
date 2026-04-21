@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import { buildQRPayload, loadOrGenerateCliKeys } from './auth.js';
 import { keysPath, sessionsDir } from './config.js';
+import { listDirs, resolveRelPath } from './fsBrowser.js';
 import { logger } from './logger.js';
 import { displayQRCode } from './qrcode.js';
 import { SessionManager, type Tool } from './sessionManager.js';
@@ -60,9 +61,10 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
     // reference to the other side, which is always fully initialized by the
     // time any of them fires (first message must cross the ws).
     let server!: WsServerHandle;
+    const agentRoot = process.cwd();
 
     const manager = new SessionManager({
-        cwd: process.cwd(),
+        cwd: agentRoot,
         geminiApiKey: opts.geminiApiKey,
         onBroadcast: (sid, seq, payload) => server.pushMessage(sid, seq, payload),
         onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
@@ -87,7 +89,8 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
                 logger.debug('[serve] input error:', err?.message),
             );
         },
-        onRpc: (id, method, params) => handleRpc(id, method, params, manager, server),
+        onRpc: (id, method, params) =>
+            handleRpc(id, method, params, manager, server, agentRoot),
     });
 
     // Rehydrate / auto-create AFTER server is assigned. Both rehydrate() and
@@ -165,6 +168,7 @@ async function handleRpc(
     rawParams: unknown,
     manager: SessionManager,
     server: WsServerHandle,
+    agentRoot: string,
 ): Promise<void> {
     const params = (rawParams as RpcParams) ?? undefined;
     const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
@@ -172,6 +176,20 @@ async function handleRpc(
     try {
         if (method === 'session.list') {
             server.sendRpcResponse(id, { sessions: manager.list() });
+            return;
+        }
+
+        if (method === 'fs.listDirs') {
+            // Browse a subdirectory under the agent root. Used by the webapp's
+            // "pick a working directory for this session" flow; the sandbox
+            // check lives in fsBrowser.resolveRelPath.
+            const rel = str(params?.relPath) ?? '';
+            const showHidden = params?.showHidden === true;
+            try {
+                server.sendRpcResponse(id, listDirs(agentRoot, rel, { showHidden }));
+            } catch (err) {
+                server.sendRpcResponse(id, null, (err as Error).message);
+            }
             return;
         }
 
@@ -185,7 +203,21 @@ async function handleRpc(
             const agentArgs = Array.isArray(params?.agentArgs)
                 ? (params!.agentArgs as unknown[]).filter((x): x is string => typeof x === 'string')
                 : undefined;
-            const session = manager.create({ tool, model, agentArgs });
+
+            // `cwd` is a POSIX relPath under the agent root; resolve + sandbox
+            // here so the manager never sees a path it couldn't verify.
+            let sessionCwd: string | undefined;
+            const rawCwd = str(params?.cwd);
+            if (rawCwd !== undefined && rawCwd !== '') {
+                try {
+                    sessionCwd = resolveRelPath(agentRoot, rawCwd);
+                } catch (err) {
+                    server.sendRpcResponse(id, null, (err as Error).message);
+                    return;
+                }
+            }
+
+            const session = manager.create({ tool, model, agentArgs, cwd: sessionCwd });
             server.sendRpcResponse(id, { session });
             return;
         }

@@ -4,6 +4,7 @@ import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { uid } from '../session/events';
 import { Modal } from './Modal';
+import { NewSessionModal } from './NewSessionModal';
 
 interface Props {
     activeSessionId: string | null;
@@ -22,9 +23,8 @@ type PendingClose = { sessionId: string; label: string };
 export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDrawer }: Props) {
     const navigate = useNavigate();
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
-    const [creating, setCreating] = useState(false);
     const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
-    const [createError, setCreateError] = useState<string | null>(null);
+    const [newSessionOpen, setNewSessionOpen] = useState(false);
 
     useEffect(() => sessionClient.onSessionsChange(setSessions), []);
 
@@ -33,21 +33,9 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
         onCloseDrawer?.();
     }, [navigate, onCloseDrawer]);
 
-    const handleCreate = useCallback(
-        async (tool: 'claude' | 'gemini') => {
-            setCreating(true);
-            setCreateError(null);
-            try {
-                const res = await sessionClient.rpc(uid(), 'session.create', { tool });
-                if (res.error) {
-                    setCreateError(`无法创建会话：${res.error}`);
-                    return;
-                }
-                const created = (res.result as { session?: ChatSessionMeta } | undefined)?.session;
-                if (created) goto(`/chat/${created.id}`);
-            } finally {
-                setCreating(false);
-            }
+    const handleSessionCreated = useCallback(
+        (s: ChatSessionMeta) => {
+            goto(`/chat/${s.id}`);
         },
         [goto],
     );
@@ -124,22 +112,19 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                 <div className="sidebar-foot">
                     <button
                         type="button"
-                        className="btn btn-secondary"
-                        disabled={creating}
-                        onClick={() => handleCreate('claude')}
+                        className="btn btn-primary btn-block"
+                        onClick={() => setNewSessionOpen(true)}
                     >
-                        + Claude
-                    </button>
-                    <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={creating}
-                        onClick={() => handleCreate('gemini')}
-                    >
-                        + Gemini
+                        + 新建会话
                     </button>
                 </div>
             </aside>
+
+            <NewSessionModal
+                open={newSessionOpen}
+                onClose={() => setNewSessionOpen(false)}
+                onCreated={handleSessionCreated}
+            />
 
             <Modal
                 open={!!pendingClose}
@@ -173,25 +158,6 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                 </div>
             </Modal>
 
-            <Modal
-                open={!!createError}
-                title="无法创建会话"
-                onClose={() => setCreateError(null)}
-                size="sm"
-            >
-                <div className="modal-body">
-                    <p className="confirm-text">{createError}</p>
-                    <div className="modal-actions">
-                        <button
-                            type="button"
-                            className="btn btn-primary"
-                            onClick={() => setCreateError(null)}
-                        >
-                            好的
-                        </button>
-                    </div>
-                </div>
-            </Modal>
         </>
     );
 }

@@ -66,8 +66,8 @@ describe('sessionStorage', () => {
         });
     });
 
-    describe('cwd filter', () => {
-        it('skips sessions whose cwd does not match', () => {
+    describe('cwd filter (containment)', () => {
+        it('skips sessions whose cwd is outside the agent root', () => {
             saveSession(dir, makeSession({ cwd: '/tmp/a' }));
             saveSession(dir, makeSession({ cwd: '/tmp/b' }));
 
@@ -78,6 +78,27 @@ describe('sessionStorage', () => {
 
         it('returns empty list when no sessions match cwd', () => {
             saveSession(dir, makeSession({ cwd: '/tmp/other' }));
+            expect(loadAllSessions(dir, '/tmp/project')).toEqual([]);
+        });
+
+        it('admits sessions whose cwd is a subdirectory of the agent root', () => {
+            saveSession(dir, makeSession({ id: randomUUID(), cwd: '/tmp/project' }));
+            saveSession(
+                dir,
+                makeSession({ id: randomUUID(), cwd: '/tmp/project/packages/foo' }),
+            );
+            saveSession(
+                dir,
+                makeSession({ id: randomUUID(), cwd: '/tmp/project/packages/bar/nested' }),
+            );
+
+            const loaded = loadAllSessions(dir, '/tmp/project');
+            expect(loaded).toHaveLength(3);
+        });
+
+        it('rejects a sibling path that only shares a prefix string', () => {
+            // /tmp/projectile is NOT inside /tmp/project, despite sharing chars.
+            saveSession(dir, makeSession({ cwd: '/tmp/projectile' }));
             expect(loadAllSessions(dir, '/tmp/project')).toEqual([]);
         });
     });

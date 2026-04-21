@@ -16,10 +16,12 @@ import {
     mkdirSync,
     readFileSync,
     readdirSync,
+    realpathSync,
     rmSync,
     writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { isInsideRoot } from './fsBrowser.js';
 import { logger } from './logger.js';
 import type { Tool } from './sessionManager.js';
 
@@ -80,14 +82,17 @@ function coerceSession(raw: unknown, filename: string): PersistedSession | null 
 }
 
 /**
- * Load every valid session file under `dir` whose `cwd` field matches `cwd`.
+ * Load every valid session file under `dir` whose `cwd` sits inside (or
+ * equals) `agentRoot`.
  *
  * Files belonging to other working directories are left untouched — a single
  * `~/.cowork-agent/sessions` folder can host sessions from multiple repos,
- * and each `cowork-agent` launch only restores its own. Results are sorted by
- * `createdAt` so the rehydrated order is stable across restarts.
+ * and each `cowork-agent` launch only restores its own. Sessions with a cwd
+ * inside the current agent root are admitted even if that cwd is a
+ * subdirectory (which is how per-session cwds land here). Results are sorted
+ * by `createdAt` so the rehydrated order is stable across restarts.
  */
-export function loadAllSessions(dir: string, cwd: string): PersistedSession[] {
+export function loadAllSessions(dir: string, agentRoot: string): PersistedSession[] {
     if (!existsSync(dir)) return [];
     let entries: string[];
     try {
@@ -96,6 +101,14 @@ export function loadAllSessions(dir: string, cwd: string): PersistedSession[] {
         logger.debug('[sessionStorage] readdir failed:', (err as Error).message);
         return [];
     }
+    const safeReal = (p: string): string => {
+        try {
+            return realpathSync(p);
+        } catch {
+            return p;
+        }
+    };
+    const rootReal = safeReal(agentRoot);
     const out: PersistedSession[] = [];
     for (const file of entries) {
         const full = join(dir, file);
@@ -103,7 +116,7 @@ export function loadAllSessions(dir: string, cwd: string): PersistedSession[] {
             const parsed: unknown = JSON.parse(readFileSync(full, 'utf8'));
             const session = coerceSession(parsed, file);
             if (!session) continue;
-            if (session.cwd !== cwd) continue;
+            if (!isInsideRoot(rootReal, safeReal(session.cwd))) continue;
             out.push(session);
         } catch (err) {
             logger.debug('[sessionStorage] parse', file, 'failed:', (err as Error).message);

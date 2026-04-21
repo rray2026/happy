@@ -148,4 +148,63 @@ describe('SessionManager rehydrate', () => {
 
         expect(onPersistRemove).toHaveBeenCalledWith(p.id);
     });
+
+    it('accepts a subdirectory cwd on rehydrate (inside root)', () => {
+        const mgr = makeManager();
+        const p = persisted({ cwd: '/tmp/project/packages/foo' });
+
+        mgr.rehydrate([p]);
+
+        expect(mgr.list()).toHaveLength(1);
+        expect(mgr.list()[0].cwd).toBe('/tmp/project/packages/foo');
+    });
+
+    it('rejects a cwd that is a sibling of root on rehydrate', () => {
+        const mgr = makeManager();
+        // /tmp/projectile shares the prefix /tmp/project but is not inside.
+        mgr.rehydrate([persisted({ cwd: '/tmp/projectile' })]);
+
+        expect(mgr.list()).toHaveLength(0);
+    });
+});
+
+describe('SessionManager per-session cwd', () => {
+    it('create() with cwd option persists that cwd', () => {
+        const onPersist = vi.fn();
+        const mgr = new SessionManager({
+            cwd: '/tmp/project',
+            onBroadcast: () => {},
+            onPersist,
+        });
+
+        const meta = mgr.create({ tool: 'claude', cwd: '/tmp/project/packages/webapp' });
+
+        expect(meta.cwd).toBe('/tmp/project/packages/webapp');
+        const persisted = onPersist.mock.calls[0][0] as PersistedSession;
+        expect(persisted.cwd).toBe('/tmp/project/packages/webapp');
+    });
+
+    it('create() with no cwd falls back to manager root', () => {
+        const mgr = new SessionManager({ cwd: '/tmp/project', onBroadcast: () => {} });
+
+        const meta = mgr.create({ tool: 'claude' });
+
+        expect(meta.cwd).toBe('/tmp/project');
+    });
+
+    it('create() rejects a cwd that escapes the manager root', () => {
+        const mgr = new SessionManager({ cwd: '/tmp/project', onBroadcast: () => {} });
+
+        expect(() => mgr.create({ tool: 'claude', cwd: '/tmp/elsewhere' })).toThrow(
+            /escapes agent root/,
+        );
+    });
+
+    it('create() rejects a sibling path that only shares the prefix string', () => {
+        const mgr = new SessionManager({ cwd: '/tmp/project', onBroadcast: () => {} });
+
+        expect(() => mgr.create({ tool: 'claude', cwd: '/tmp/projectile' })).toThrow(
+            /escapes agent root/,
+        );
+    });
 });

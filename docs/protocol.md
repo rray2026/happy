@@ -344,6 +344,13 @@ Gemini                SessionManager                       Webapp
     tool: 'claude' | 'gemini';
     model?: string;
     agentArgs?: string[];
+    /**
+     * 可选：本 session 使用的工作目录，POSIX 风格、相对 agent 启动目录。
+     * 留空 / 省略 = 使用 agent 启动目录本身。必须是启动目录（含 symlink
+     * 解析后的 realpath）的子目录，否则返回 'path escapes agent root'。
+     * 参考 `fs.listDirs` 获取可选子目录列表。
+     */
+    cwd?: string;
   }
 }
 
@@ -353,9 +360,49 @@ Gemini                SessionManager                       Webapp
 // 失败响应（超出上限或参数错误）
 { type: 'rpc-response', id, error: 'session limit reached (max 10)' }
 { type: 'rpc-response', id, error: 'tool must be "claude" or "gemini"' }
+{ type: 'rpc-response', id, error: 'path escapes agent root' }
 ```
 
 创建成功后，agent 也会主动推送一条 `sessions` 消息（含新完整列表）。
+
+### `fs.listDirs`
+
+列出 agent 启动目录某个子目录下的直接子目录（仅目录，不含文件）。供 webapp
+的"新建会话 → 选择工作目录"流程使用。
+
+路径沙箱：`relPath` 会被 `path.resolve(agentRoot, relPath)` 解析，然后按
+realpath 校验其是否仍位于 agent 根下；escape（`..` 回退、绝对路径、
+指向外部的 symlink）统一返回 `'path escapes agent root'`。
+
+默认隐藏：所有 dot-dirs（`.git` / `.hidden` / ...）、`node_modules`、
+`.svn` / `.hg` / `.DS_Store`。`showHidden: true` 会 surfaced dot-dirs，但
+`node_modules` 等硬屏蔽项仍不会出现。
+
+```ts
+// 请求
+{
+  type: 'rpc', id,
+  method: 'fs.listDirs',
+  params: {
+    relPath?: string;      // POSIX 风格，缺省 = '' 即 agent 根目录
+    showHidden?: boolean;  // 默认 false
+  }
+}
+
+// 成功响应
+{
+  type: 'rpc-response', id,
+  result: {
+    root: string;      // agent 启动目录的 realpath（绝对路径）
+    relPath: string;   // 实际浏览到的目录（经 realpath canonicalize）
+    dirs: string[];    // 直接子目录名，大小写无关字母序
+  }
+}
+
+// 失败响应
+{ type: 'rpc-response', id, error: 'path escapes agent root' }
+{ type: 'rpc-response', id, error: '<fs error message>' }
+```
 
 ### `session.close`
 
@@ -492,7 +539,7 @@ getDelta(fromSeq)
   id: string;                         // chat sessionId（= 文件名）
   tool: 'claude' | 'gemini';
   model: string | undefined;
-  cwd: string;                        // 创建时的工作目录（用于过滤）
+  cwd: string;                        // 该 session 的工作目录（= agent 根或根的某个子目录）
   createdAt: number;                  // Date.now()
   agentArgs: string[];                // CLI 额外参数（透传给子进程）
   claudeSessionId: string | null;     // claude --resume <id>
@@ -500,7 +547,12 @@ getDelta(fromSeq)
 }
 ```
 
-**cwd 过滤**：启动时 `loadAllSessions(sessionsDir, process.cwd())` 只载入 `cwd === process.cwd()` 的 session——在别的目录启动 `cowork-agent` 不会串到本目录的会话上，也不会错误地把 `--resume` 指向另一个 repo 的 Claude 会话。其他目录的文件保留在磁盘上，由各自的启动实例各自 rehydrate。
+**cwd 过滤**：启动时 `loadAllSessions(sessionsDir, process.cwd())` 只载入
+`cwd === process.cwd()` 的 session；`SessionManager.rehydrate()` 则把准入标
+准放宽为"containment"——session 的 `cwd` 只要位于 agent 根内（含等于根
+本身）即可。这样 session 可以各自把工作目录指到子仓库/子项目，而在别的
+目录启动 `cowork-agent` 仍然不会串到本目录的会话。其他目录的文件保留在磁盘
+上，由各自的启动实例各自 rehydrate。
 
 ### 写入时机
 
