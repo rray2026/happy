@@ -196,6 +196,70 @@ describe('E2E: webapp SessionClient ↔ agent WebSocket server', () => {
         client.disconnect();
     });
 
+    // ── Full-buffer replay (ChatScreen reload scenario) ──────────────────────
+
+    it('session.replay(-1) re-delivers the full in-memory stream after a reload', async () => {
+        // Route `session.replay` to the real SessionManager so the test exercises
+        // the same path serve.ts wires up in production.
+        rig.setRpcResponder((id, method, params) => {
+            if (method === 'session.replay') {
+                const p = params as { sessionId: string; fromSeq?: number };
+                const from = typeof p.fromSeq === 'number' ? p.fromSeq : -1;
+                for (const entry of rig.manager.replayFrom(p.sessionId, from)) {
+                    rig.server.pushMessage(p.sessionId, entry.seq, entry.payload);
+                }
+                rig.server.sendRpcResponse(id, { ok: true });
+                return;
+            }
+            rig.server.sendRpcResponse(id, { ok: true });
+        });
+
+        // Produce some chat history on the agent side.
+        const first = rig.makeClient();
+        const firstReceived: number[] = [];
+        first.client.onMessage((_sid, _p, seq) => firstReceived.push(seq));
+        first.client.connectFirstTime(rig.qrPayload, 'wa-pub');
+        await waitForStatus(first.client, 'connected');
+
+        rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'hi' } });
+        rig.pushChatEvent({ type: 'assistant', text: 'hello back' });
+        rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'bye' } });
+        await waitFor(() => firstReceived.length >= 3);
+
+        // At this point the webapp has persisted lastSeqs[chatSessionId] = 2.
+        const saved = first.storage.loadCredentials()!;
+        expect(saved.lastSeqs[rig.chatSessionId]).toBe(2);
+        first.client.disconnect();
+
+        // Simulate a webapp reload: fresh SessionClient, stored credentials,
+        // reconnects. Welcome's delta is empty because lastSeqs is already at
+        // the tip — exactly the "history disappears after reload" scenario.
+        const resumed = rig.makeClient(saved);
+        const afterReload: Array<{ seq: number; payload: unknown }> = [];
+        resumed.client.onMessage((_sid, payload, seq) => afterReload.push({ seq, payload }));
+        resumed.client.connectFromStored(saved);
+        await waitForStatus(resumed.client, 'connected');
+
+        // Nothing arrived from the welcome handshake — agent had no seq > 2.
+        expect(afterReload).toEqual([]);
+
+        // ChatScreen's mount-time behavior (Plan A): explicitly ask for the
+        // whole buffer. The RPC completes after the pushMessage calls, so by
+        // the time `await` resolves every event should already be in hand.
+        const res = await resumed.client.rpc('r-1', 'session.replay', {
+            sessionId: rig.chatSessionId,
+            fromSeq: -1,
+        });
+        expect(res.error).toBeUndefined();
+        expect(res.result).toEqual({ ok: true });
+
+        expect(afterReload.map((m) => m.seq)).toEqual([0, 1, 2]);
+        // lastSeqs must not regress — replay just re-emits, it doesn't rewind.
+        expect(resumed.client.getLastSeq(rig.chatSessionId)).toBe(2);
+
+        resumed.client.disconnect();
+    });
+
     // ── Eviction ──────────────────────────────────────────────────────────────
 
     it('eviction: second client connecting displaces the first', async () => {

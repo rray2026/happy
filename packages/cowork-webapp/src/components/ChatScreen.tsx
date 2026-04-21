@@ -92,6 +92,14 @@ export function ChatScreen() {
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const logsBottomRef = useRef<HTMLDivElement>(null);
+    /**
+     * Per-session seq dedupe. SessionClient tracks `lastSeqs` but dispatches
+     * every inbound `message` unconditionally (it has no payload cache), so a
+     * `session.replay` RPC that re-emits the entire stream will deliver events
+     * that the welcome-handshake delta already delivered. Without dedupe the
+     * user would see duplicate items. Cleared on sessionId change.
+     */
+    const seenSeqs = useRef<Set<number>>(new Set());
 
     // Reset per-session UI state when the route param changes: different
     // chat → different event stream → different messages.
@@ -99,13 +107,16 @@ export function ChatScreen() {
         setItems([]);
         setThinking(false);
         setPermission(null);
+        seenSeqs.current = new Set();
     }, [sessionId]);
 
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
         const unsubSessions = sessionClient.onSessionsChange(setSessions);
-        const unsubMsg = sessionClient.onMessage((sid, payload) => {
+        const unsubMsg = sessionClient.onMessage((sid, payload, seq) => {
             if (sid !== sessionId) return;
+            if (seenSeqs.current.has(seq)) return;
+            seenSeqs.current.add(seq);
             if ((payload as PermissionEvent).type === 'permission-request') {
                 setPermission(payload as PermissionEvent);
                 return;
@@ -118,6 +129,49 @@ export function ChatScreen() {
         });
 
         return () => { unsubStatus(); unsubSessions(); unsubMsg(); };
+    }, [sessionId]);
+
+    /**
+     * Pull the full event stream for this session once the connection is up.
+     *
+     * Why: SessionClient's `hello.lastSeqs` only asks the agent to replay
+     * events with `seq > lastSeqs[sid]`. After a webapp reload, ChatScreen
+     * re-mounts with empty `items` but `lastSeqs` still points at the last
+     * seen seq — so the welcome-handshake delta is typically empty and the
+     * conversation looks blank. We work around that by explicitly asking the
+     * agent to replay from `-1` (the whole buffer, up to SessionStore's
+     * circular-buffer cap of 200 entries).
+     *
+     * Dedupe is handled by `seenSeqs`; this call is safe to fire even when
+     * the welcome delta already delivered part of the stream.
+     */
+    useEffect(() => {
+        if (!sessionId) return;
+        let cancelled = false;
+        const requestReplay = () => {
+            if (cancelled) return;
+            sessionClient
+                .rpc(uid(), 'session.replay', { sessionId, fromSeq: -1 })
+                .catch(() => {
+                    /* silent: agent disconnects / unknown session ids are
+                     * non-fatal; UI will stay empty and recover on next mount. */
+                });
+        };
+        if (sessionClient.getStatus() === 'connected') {
+            requestReplay();
+            return () => { cancelled = true; };
+        }
+        // Not yet connected — wait for the first 'connected' transition.
+        const unsub = sessionClient.onStatusChange((s) => {
+            if (s === 'connected') {
+                unsub();
+                requestReplay();
+            }
+        });
+        return () => {
+            cancelled = true;
+            unsub();
+        };
     }, [sessionId]);
 
     useEffect(() => {
