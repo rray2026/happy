@@ -78,6 +78,7 @@
   --chat-max-w: 760px;
   --sidebar-w: 280px;
   --header-h: 52px;
+  --input-bar-h: 56px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -441,6 +442,8 @@ button:focus:not(:focus-visible) { outline: none; }
   top: 0;
   z-index: 5;
   min-height: var(--header-h);
+  transition: transform var(--t-base) ease, opacity var(--t-base) ease;
+  will-change: transform;
 }
 
 .chat-header-left {
@@ -800,6 +803,8 @@ button:focus:not(:focus-visible) { outline: none; }
   background: var(--bg);
   flex-shrink: 0;
   max-width: 100%;
+  transition: transform var(--t-base) ease, opacity var(--t-base) ease;
+  will-change: transform;
 }
 
 @media (min-width: 769px) {
@@ -899,6 +904,41 @@ button:focus:not(:focus-visible) { outline: none; }
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px);
+}
+
+/* ── Mobile auto-hide chrome ─────────────────────────────────────────────── */
+/* On mobile, header and input bar float absolutely so messages fill the full
+   height. When chrome is hidden they slide off-screen; messages padding keeps
+   the scroll position stable. Desktop is unaffected. */
+@media (max-width: 768px) {
+  .chat-header {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+  }
+  .chat-input-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+  }
+  /* Reserve space for overlaid bars so content isn't hidden behind them */
+  .chat-messages {
+    padding-top: calc(var(--header-h) + var(--safe-top) + var(--s-2));
+    padding-bottom: calc(var(--input-bar-h) + var(--safe-bottom) + var(--s-2));
+  }
+  /* Chrome-hidden: slide bars off-screen */
+  .chat-main.chrome-hidden .chat-header {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .chat-main.chrome-hidden .chat-input-bar {
+    transform: translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* FAB follows the input bar up when input is shown */
+  .chat-main.chrome-hidden .chat-fab {
+    bottom: var(--s-4);
+  }
 }
 
 /* ── Session sidebar ──────────────────────────────────────────────────────── */
