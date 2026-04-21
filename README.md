@@ -79,7 +79,8 @@ GitHub Actions：
 
 ## 协议文档
 
-握手、nonce、credential、消息格式、断线重连、agent 事件 payload 等细节见 [docs/protocol.md](docs/protocol.md)。
+- [docs/protocol.md](docs/protocol.md) — 协议总览：握手、重连、QR payload、心跳、RPC、Delta Sync、认证
+- [docs/messages.md](docs/messages.md) — 每条消息的字段语义、校验规则、JSON 示例
 
 ## License
 

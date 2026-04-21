@@ -1,3 +1,5 @@
+// ─── Keys & credential ───────────────────────────────────────────────────────
+
 export interface CliKeys {
     signPublicKey: Uint8Array;
     signSecretKey: Uint8Array;
@@ -18,42 +20,7 @@ export interface SessionCredentialPayload {
     expiry: number;
 }
 
-// ── Webapp → Agent ───────────────────────────────────────────────────────────
-
-export interface HelloFirstTimeMessage {
-    type: 'hello';
-    nonce: string;
-    webappPublicKey: string;
-}
-
-export interface HelloReconnectMessage {
-    type: 'hello';
-    sessionCredential: string;
-    webappPublicKey: string;
-    lastSeq: number;
-}
-
-export type HelloMessage = HelloFirstTimeMessage | HelloReconnectMessage;
-
-export interface InputMessage {
-    type: 'input';
-    text: string;
-}
-
-export interface RpcRequestMessage {
-    type: 'rpc';
-    id: string;
-    method: string;
-    params: unknown;
-}
-
-export interface PongMessage {
-    type: 'pong';
-}
-
-export type WebappMessage = HelloMessage | InputMessage | RpcRequestMessage | PongMessage;
-
-// ── Agent → Webapp ───────────────────────────────────────────────────────────
+// ─── Agent → Webapp: Phase 1 (handshake) ────────────────────────────────────
 
 export interface WelcomeMessage {
     type: 'welcome';
@@ -62,19 +29,21 @@ export interface WelcomeMessage {
     sessionCredential: string;
 }
 
-export interface DataMessage {
-    type: 'message';
-    seq: number;
-    payload: unknown;
-}
-
+/** Always followed by ws.close(). Sent when handshake fails or when a malformed
+ * message arrives in either phase. */
 export interface ErrorMessage {
     type: 'error';
     message: string;
 }
 
-export interface PingMessage {
-    type: 'ping';
+// ─── Agent → Webapp: Phase 2 (session) ──────────────────────────────────────
+
+/** Agent event broadcast — the unit of the session's event stream.
+ * `seq` is monotonic; delta replay on reconnect uses it. */
+export interface SyncMessage {
+    type: 'message';
+    seq: number;
+    payload: unknown;
 }
 
 export interface RpcResponseMessage {
@@ -84,16 +53,23 @@ export interface RpcResponseMessage {
     error?: string;
 }
 
-export type CliMessage =
-    | WelcomeMessage
-    | DataMessage
-    | ErrorMessage
-    | PingMessage
-    | RpcResponseMessage;
+export interface PingMessage {
+    type: 'ping';
+}
 
-// ── Server handle ────────────────────────────────────────────────────────────
+// ─── Unions ──────────────────────────────────────────────────────────────────
+
+export type HandshakeOutbound = WelcomeMessage | ErrorMessage;
+export type SessionOutbound = SyncMessage | RpcResponseMessage | PingMessage | ErrorMessage;
+export type CliMessage = HandshakeOutbound | SessionOutbound;
+
+// ─── Server handle ───────────────────────────────────────────────────────────
 
 export interface WsServerHandle {
+    /** The port the server is actually bound to (useful when opts.port was 0). */
+    port(): number;
+    /** Resolves once the server's `listening` event has fired. */
+    ready(): Promise<void>;
     broadcast(payload: unknown): number;
     sendRpcResponse(id: string, result: unknown | null, error?: string): void;
     replayFrom(fromSeq: number): void;

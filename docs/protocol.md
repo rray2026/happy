@@ -3,107 +3,48 @@
 `cowork-agent` 启动嵌入式 WebSocket 服务器，`cowork-webapp` 扫 QR 直连。本文档描述两者之间的全部通信协议。
 
 相关源码：
-- Agent：`packages/cowork-agent/src/`（`types.ts` / `wsServer.ts` / `auth.ts` / `sessionStore.ts` / `serve.ts`）
+- Agent：`packages/cowork-agent/src/`（`schemas.ts` / `types.ts` / `wsServer.ts` / `auth.ts` / `sessionStore.ts` / `serve.ts`）
 - Webapp：`packages/cowork-webapp/src/directSocket.ts`
 
 ---
 
-## 1. 消息类型一览
+## 1. 协议阶段
 
-### Webapp → CLI
+协议由两个严格分离的阶段组成，每条 WebSocket 连接都从 Phase 1 开始，握手成功后才进入 Phase 2。
 
-| type | 触发时机 |
-|------|----------|
-| `hello` | 连接建立后立即发送（首次或重连） |
-| `input` | 用户发送消息给 agent |
-| `rpc` | 调用 CLI 侧方法 |
-| `pong` | 响应 CLI 的 ping |
+| 阶段 | 允许的入站消息 | 允许的出站消息 | 退出条件 |
+|---|---|---|---|
+| **Phase 1: 握手** | `hello`（首次或重连，二选一） | `welcome`（成功）/ `error` + close（失败） | 成功 → 进入 Phase 2；失败 → 连接关闭 |
+| **Phase 2: 会话** | `input` / `rpc` / `pong` | `message` / `rpc-response` / `ping` / `error` + close | 连接关闭 |
 
-### CLI → Webapp
+**严格校验**：agent 侧入站消息一律用 Zod schema 校验（见 `schemas.ts`）。任何不符合当前阶段 schema 的消息（包括跨阶段消息、额外字段、类型错误）一律回 `error` 并 `close`。这意味着：
 
-| type | 触发时机 |
-|------|----------|
-| `welcome` | 握手验证通过后 |
-| `message` | 广播 agent 输出事件 |
-| `error` | 握手验证失败 |
-| `ping` | 每 30 秒心跳 |
-| `rpc-response` | 响应 webapp 的 RPC 请求 |
+- Phase 1 只接受两种 `hello` shape；发 `input` / `rpc` / `pong` → `'expected hello message'` + close。
+- Phase 2 不再接受 `hello`；重新认证必须重连。
+- 所有消息对象都是 `strict` 模式，多余字段会被拒绝（防止注入）。
 
----
+## 2. 消息类型一览
 
-## 2. 完整消息结构
+### Webapp → Agent
 
-### Webapp → CLI
+| type | 阶段 | 触发时机 |
+|---|---|---|
+| `hello` | Phase 1 | 连接建立后立即发送（首次扫码或带 credential 重连） |
+| `input` | Phase 2 | 用户发送消息给 agent（agent 会入 store 分配 seq 并回显，像 IM 一样记录用户侧发言） |
+| `rpc` | Phase 2 | 调用 agent 侧方法 |
+| `pong` | Phase 2 | 响应 agent 的 `ping` |
 
-```ts
-// 首次连接
-{
-  type: 'hello';
-  nonce: string;           // Base64(32字节随机数，来自 QR payload)
-  webappPublicKey: string; // Base64(webapp Ed25519 公钥)
-}
+### Agent → Webapp
 
-// 重连
-{
-  type: 'hello';
-  sessionCredential: string;  // JSON: {payload, signature}，由首次握手签发
-  webappPublicKey: string;    // 与首次相同的公钥
-  lastSeq: number;            // webapp 已收到的最后 seq（初次重连传 -1）
-}
+| type | 阶段 | 触发时机 |
+|---|---|---|
+| `welcome` | Phase 1 末 | 握手验证通过 |
+| `error` | 任意 | 握手失败 / schema 校验失败 / JSON 错误；发出后立即 `close` |
+| `message` | Phase 2 | 广播 agent 事件（延续 seq） |
+| `ping` | Phase 2 | 每 30 秒心跳 |
+| `rpc-response` | Phase 2 | 响应 webapp 的 RPC 请求 |
 
-// 发送 agent 输入
-{
-  type: 'input';
-  text: string;
-}
-
-// RPC 调用
-{
-  type: 'rpc';
-  id: string;       // 唯一 ID（UUID 推荐）
-  method: string;
-  params: unknown;
-}
-
-// 心跳响应
-{ type: 'pong' }
-```
-
-### CLI → Webapp
-
-```ts
-// 握手成功
-{
-  type: 'welcome';
-  sessionId: string;           // 本次 serve 会话的 UUID
-  currentSeq: number;          // store 当前最大 seq（空时为 -1）
-  sessionCredential: string;   // 供重连使用，存入 localStorage
-}
-
-// Agent 输出事件（所有广播内容均通过此消息传递）
-{
-  type: 'message';
-  seq: number;        // 单调递增序列号（从 0 开始）
-  payload: unknown;   // agent 事件对象（见第 6 节）
-}
-
-// 握手失败
-{
-  type: 'error';
-  message: string;   // 'nonce expired or invalid' | 'invalid credential'
-}
-
-// 心跳
-{ type: 'ping' }
-
-// RPC 响应
-{
-  type: 'rpc-response';
-  id: string;        // 对应 RPC 请求的 id
-  result?: unknown;  // 成功时有值
-  error?: string;    // 失败时有值
-}
-```
+完整消息结构（字段语义、校验规则、JSON 示例）见独立文档 [messages.md](messages.md)。
 
 ---
 
@@ -379,6 +320,8 @@ Gemini                CLI                              Webapp
 ## 9. SessionStore 与 Delta Sync
 
 CLI 使用循环缓冲区（默认 200 条）保存所有广播事件，支持断线重连后的增量同步。
+
+**消息空间是统一的**：agent 自身产生的事件 和 webapp 发来的 `input`（被 agent 包装为 `{ type: 'user', message: { role: 'user', content } }` 事件）共享同一 `seq` 空间，按时间顺序单调递增。这与聊天工具（IM）一致——每条消息都有唯一编号，重连时 delta 可取回完整双向聊天记录。
 
 ```
 append(payload)

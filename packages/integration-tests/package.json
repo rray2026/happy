@@ -1,0 +1,19 @@
+{
+    "name": "integration-tests",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "End-to-end tests that exercise cowork-agent's WebSocket server against the real cowork-webapp SessionClient over a Node `ws` transport.",
+    "scripts": {
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@types/node": ">=20",
+        "@types/ws": "^8.18.1",
+        "typescript": "~5.9.3",
+        "vitest": "^3.2.4",
+        "ws": "^8.19.0"
+    }
+}

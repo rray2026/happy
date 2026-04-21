@@ -1,3 +1,4 @@
 packages:
   - "packages/cowork-webapp"
   - "packages/cowork-agent"
+  - "packages/integration-tests"

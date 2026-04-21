@@ -4,7 +4,8 @@
     "workspaces": {
         "packages": [
             "packages/cowork-agent",
-            "packages/cowork-webapp"
+            "packages/cowork-webapp",
+            "packages/integration-tests"
         ]
     },
     "pnpm": {
