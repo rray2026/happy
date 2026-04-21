@@ -5,10 +5,15 @@
  * Keeps the process alive so conversation state is preserved across prompts.
  *
  * Session update kinds we translate:
- *   agent_message_chunk  → accumulated text, flushed as one assistant event
+ *   agent_message_chunk  → {type:'assistant', message:{...}, _delta:true, _streamId}
+ *                           (progressive; one event per chunk)
  *   agent_thought_chunk  → {type:'thinking', thinking:text}
- *   tool_call            → {type:'assistant', message:{...tool_use...}}
- *   tool_call_update     → {type:'tool_result', ...}
+ *   tool_call            → (finalize current stream first, then emit tool_use)
+ *   tool_call_update     → (finalize current stream first, then emit tool_result)
+ *
+ * End-of-prompt and tool boundaries emit a finalize event:
+ *   {type:'assistant', _final:true, _streamId}
+ * which carries no text — clients keyed by _streamId mark the stream done.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -35,36 +40,71 @@ export type PermissionRequestFn = (
     input: unknown,
 ) => Promise<boolean>;
 
-function updateToEvent(update: Record<string, unknown>): unknown | null {
+export interface ProcessState {
+    /** When non-null, an assistant text stream is in progress keyed by this id. */
+    currentStreamId: string | null;
+}
+
+export function createInitialProcessState(): ProcessState {
+    return { currentStreamId: null };
+}
+
+/**
+ * Pure reducer: map one ACP session/update to the events to broadcast (in
+ * order) and the next state. No I/O, no side effects — easy to unit test.
+ *
+ * `makeId` is injected so callers (and tests) control stream-id generation.
+ */
+export function processSessionUpdate(
+    update: Record<string, unknown>,
+    state: ProcessState,
+    makeId: () => string,
+): { emit: unknown[]; state: ProcessState } {
     const kind = update.sessionUpdate as string | undefined;
 
     if (kind === 'agent_message_chunk') {
         const text =
             (update.content as { text?: string } | undefined)?.text ??
             (update.messageChunk as { textDelta?: string } | undefined)?.textDelta;
-        if (!text) return null;
-        return { _acpChunk: true, text };
+        if (!text) return { emit: [], state };
+        const streamId = state.currentStreamId ?? makeId();
+        return {
+            emit: [
+                {
+                    type: 'assistant',
+                    message: { role: 'assistant', content: [{ type: 'text', text }] },
+                    _delta: true,
+                    _streamId: streamId,
+                },
+            ],
+            state: { currentStreamId: streamId },
+        };
     }
 
     if (kind === 'agent_thought_chunk') {
         const text = (update.content as { text?: string } | undefined)?.text;
-        if (!text) return null;
-        return { type: 'thinking', thinking: text };
+        if (!text) return { emit: [], state };
+        return { emit: [{ type: 'thinking', thinking: text }], state };
     }
 
     if (kind === 'tool_call') {
-        const toolCallId = (update.toolCallId as string | undefined) ?? randomUUID();
+        const toolCallId = (update.toolCallId as string | undefined) ?? makeId();
         const name =
             (update.title as string | undefined) ??
             (update.kind as string | undefined) ??
             'tool';
-        return {
+        const emit: unknown[] = [];
+        if (state.currentStreamId) {
+            emit.push({ type: 'assistant', _final: true, _streamId: state.currentStreamId });
+        }
+        emit.push({
             type: 'assistant',
             message: {
                 role: 'assistant',
                 content: [{ type: 'tool_use', id: toolCallId, name, input: {} }],
             },
-        };
+        });
+        return { emit, state: { currentStreamId: null } };
     }
 
     if (kind === 'tool_call_update') {
@@ -78,15 +118,29 @@ function updateToEvent(update: Record<string, unknown>): unknown | null {
                 ?.filter((c) => c.type === 'content')
                 .map((c) => c.content?.text ?? '')
                 .join('') ?? '';
-        return {
+        const emit: unknown[] = [];
+        if (state.currentStreamId) {
+            emit.push({ type: 'assistant', _final: true, _streamId: state.currentStreamId });
+        }
+        emit.push({
             type: 'tool_result',
             tool_use_id: toolCallId,
             content: resultText,
             is_error: status === 'failed',
-        };
+        });
+        return { emit, state: { currentStreamId: null } };
     }
 
-    return null;
+    return { emit: [], state };
+}
+
+/** Finalize any in-progress assistant stream (called at prompt end). */
+export function finalizeStream(state: ProcessState): { emit: unknown[]; state: ProcessState } {
+    if (!state.currentStreamId) return { emit: [], state };
+    return {
+        emit: [{ type: 'assistant', _final: true, _streamId: state.currentStreamId }],
+        state: { currentStreamId: null },
+    };
 }
 
 export class GeminiAcpSession {
@@ -94,12 +148,14 @@ export class GeminiAcpSession {
     private acpSessionId: string | null = null;
     private msgId = 1;
     private pending = new Map<string, (msg: JsonRpcMsg) => void>();
-    private textAccum = '';
+    private processState: ProcessState = createInitialProcessState();
     private readonly broadcast: BroadcastFn;
     private readonly apiKey: string | undefined;
     private readonly onPermissionRequest: PermissionRequestFn | undefined;
     private readonly resumeSessionId: string | undefined;
     private readonly model: string | undefined;
+    private readonly command: string;
+    private readonly extraEnv: Record<string, string> | undefined;
 
     constructor(opts: {
         broadcast: BroadcastFn;
@@ -107,23 +163,31 @@ export class GeminiAcpSession {
         onPermissionRequest?: PermissionRequestFn;
         resumeSessionId?: string;
         model?: string;
+        /** Override the `gemini` binary name/path. Defaults to `'gemini'`. Intended for tests. */
+        command?: string;
+        /** Extra env merged onto `process.env` when spawning. Intended for tests. */
+        extraEnv?: Record<string, string>;
     }) {
         this.broadcast = opts.broadcast;
         this.apiKey = opts.apiKey;
         this.onPermissionRequest = opts.onPermissionRequest;
         this.resumeSessionId = opts.resumeSessionId;
         this.model = opts.model;
+        this.command = opts.command ?? 'gemini';
+        this.extraEnv = opts.extraEnv;
     }
 
     async sendPrompt(text: string): Promise<void> {
         if (!this.proc || !this.acpSessionId) await this.startAndInit();
         try {
-            this.textAccum = '';
+            this.processState = createInitialProcessState();
             await this.rpc('session/prompt', {
                 sessionId: this.acpSessionId,
                 prompt: [{ type: 'text', text }],
             });
-            this.flushAccum();
+            const finalize = finalizeStream(this.processState);
+            this.processState = finalize.state;
+            for (const ev of finalize.emit) this.broadcast(ev);
         } catch (err) {
             logger.debug('[gemini] prompt error, resetting session:', (err as Error).message);
             this.dispose();
@@ -149,11 +213,14 @@ export class GeminiAcpSession {
             env.GEMINI_API_KEY = this.apiKey;
             env.GOOGLE_API_KEY = this.apiKey;
         }
+        if (this.extraEnv) {
+            Object.assign(env, this.extraEnv);
+        }
 
         const spawnArgs = ['--experimental-acp', ...(this.model ? ['-m', this.model] : [])];
-        logger.debug('[gemini] spawning', spawnArgs.join(' '));
+        logger.debug('[gemini] spawning', this.command, spawnArgs.join(' '));
 
-        const proc = spawn('gemini', spawnArgs, {
+        const proc = spawn(this.command, spawnArgs, {
             cwd: process.cwd(),
             env,
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -280,29 +347,10 @@ export class GeminiAcpSession {
             const update = (msg.params as { update?: Record<string, unknown> } | undefined)?.update;
             if (!update) return;
 
-            const kind = update.sessionUpdate as string | undefined;
-            if (kind === 'tool_call' || kind === 'tool_call_update') this.flushAccum();
-
-            const event = updateToEvent(update);
-            if (!event) return;
-
-            const chunk = event as { _acpChunk?: boolean; text?: string };
-            if (chunk._acpChunk) {
-                this.textAccum += chunk.text ?? '';
-            } else {
-                this.broadcast(event);
-            }
+            const { emit, state } = processSessionUpdate(update, this.processState, randomUUID);
+            this.processState = state;
+            for (const ev of emit) this.broadcast(ev);
         }
-    }
-
-    private flushAccum(): void {
-        const text = this.textAccum;
-        this.textAccum = '';
-        if (!text) return;
-        this.broadcast({
-            type: 'assistant',
-            message: { role: 'assistant', content: [{ type: 'text', text }] },
-        });
     }
 
     private rpc(method: string, params?: unknown): Promise<JsonRpcMsg> {

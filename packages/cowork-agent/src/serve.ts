@@ -1,14 +1,13 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import chalk from 'chalk';
+import { wireAgentToServer, type AgentType } from './assemble.js';
 import { buildQRPayload, loadOrGenerateCliKeys } from './auth.js';
-import { runClaudeProcess } from './claudeProcess.js';
 import { keysPath, statePath } from './config.js';
-import { GeminiAcpSession } from './geminiAcp.js';
 import { logger } from './logger.js';
 import { displayQRCode } from './qrcode.js';
 import { startWsServer } from './wsServer.js';
 
-export type AgentType = 'claude' | 'gemini';
+export type { AgentType };
 
 export interface ServeOptions {
     agent: AgentType;
@@ -81,71 +80,12 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         logger.debug('[serve] found previous gemini session:', serveState.geminiSessionId);
     }
 
-    let claudeSessionId: string | null = null;
-    let agentBusy = false;
-    const abortController = new AbortController();
-
-    const permissionPending = new Map<string, (approved: boolean) => void>();
-
-    const geminiSession =
-        opts.agent === 'gemini'
-            ? new GeminiAcpSession({
-                  broadcast: (e) => server.broadcast(e),
-                  apiKey: opts.geminiApiKey,
-                  resumeSessionId: serveState?.geminiSessionId,
-                  model: opts.model,
-                  onPermissionRequest: (permissionId, toolName, input) =>
-                      new Promise<boolean>((resolve) => {
-                          permissionPending.set(permissionId, resolve);
-                          server.broadcast({
-                              type: 'permission-request',
-                              permissionId,
-                              toolName,
-                              input,
-                          });
-                      }),
-              })
-            : null;
-
-    async function handleInput(text: string): Promise<void> {
-        if (agentBusy) {
-            logger.debug('[serve] ignored input — agent busy');
-            return;
-        }
-        agentBusy = true;
-        try {
-            if (opts.agent === 'gemini' && geminiSession) {
-                try {
-                    await geminiSession.sendPrompt(text);
-                    const gid = geminiSession.getSessionId();
-                    if (gid) saveServeState({ geminiSessionId: gid, cwd: process.cwd() });
-                    server.broadcast({ type: 'result', subtype: 'success', result: 'Done' });
-                } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    logger.debug('[serve] gemini error:', msg);
-                    server.broadcast({ type: 'result', subtype: 'error', result: msg });
-                }
-                return;
-            }
-
-            await runClaudeProcess({
-                prompt: text,
-                resumeSessionId: claudeSessionId,
-                model: opts.model,
-                agentArgs: opts.agentArgs,
-                onEvent: (e) => server.broadcast(e),
-                onSessionId: (id) => {
-                    if (!claudeSessionId) {
-                        claudeSessionId = id;
-                        logger.debug('[serve] claude session id:', id);
-                    }
-                },
-                abort: abortController.signal,
-            });
-        } finally {
-            agentBusy = false;
-        }
-    }
+    // WebSocket server and the agent wire reference each other: wsServer needs
+    // onInput/onRpc at construction, but wire needs the server handle for
+    // broadcasting. Resolve by constructing the server with callbacks that
+    // defer to `wire`, then assigning `wire` immediately after. Callbacks only
+    // fire after a ws message arrives, so `wire` is always initialized by then.
+    let wire!: ReturnType<typeof wireAgentToServer>;
 
     const server = startWsServer({
         port: opts.port,
@@ -153,52 +93,22 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         sessionId,
         cliKeys,
         qrPayload,
-        onRpc: async (id, method, params) => {
-            if (method === 'abort') {
-                abortController.abort();
-                geminiSession?.dispose();
-                server.sendRpcResponse(id, { ok: true });
-                return;
-            }
-            if (method === 'permissionResponse') {
-                const p = params as { permissionId: string; approved: boolean };
-                const resolver = permissionPending.get(p.permissionId);
-                if (resolver) {
-                    permissionPending.delete(p.permissionId);
-                    resolver(p.approved);
-                }
-                server.sendRpcResponse(id, { ok: true });
-                return;
-            }
-            if (method === 'replay') {
-                const raw = (params as Record<string, unknown> | undefined)?.fromSeq;
-                const fromSeq = parseInt((raw as string) ?? '-1', 10);
-                server.replayFrom(isNaN(fromSeq) ? -1 : fromSeq);
-                server.sendRpcResponse(id, { ok: true });
-                return;
-            }
-            if (method === 'getLogs') {
-                const raw = (params as Record<string, unknown> | undefined)?.lines;
-                const count = parseInt((raw as string) ?? '200', 10);
-                try {
-                    const content = readFileSync(logger.getLogPath(), 'utf8');
-                    const allLines = content.split('\n').filter(Boolean);
-                    server.sendRpcResponse(id, {
-                        lines: allLines.slice(-count),
-                        logPath: logger.getLogPath(),
-                    });
-                } catch {
-                    server.sendRpcResponse(id, { lines: [], logPath: logger.getLogPath() });
-                }
-                return;
-            }
-            server.sendRpcResponse(id, null, `unknown method: ${method}`);
-        },
+        onRpc: (id, method, params) => wire.handleRpc(id, method, params),
         onInput: (text) => {
-            handleInput(text).catch((err: Error) =>
+            wire.handleInput(text).catch((err: Error) =>
                 logger.debug('[serve] input error:', err?.message),
             );
         },
+    });
+
+    wire = wireAgentToServer({
+        agent: opts.agent,
+        server,
+        model: opts.model,
+        agentArgs: opts.agentArgs,
+        resumeSessionId: serveState?.geminiSessionId,
+        geminiApiKey: opts.geminiApiKey,
+        onGeminiSessionId: (id) => saveServeState({ geminiSessionId: id, cwd: process.cwd() }),
     });
 
     const qrJson = JSON.stringify(qrPayload);
@@ -239,7 +149,6 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         process.on('SIGTERM', resolve);
     });
 
-    abortController.abort();
-    geminiSession?.dispose();
+    wire.dispose();
     server.close();
 }
