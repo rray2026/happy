@@ -3,19 +3,36 @@
 `cowork-agent` 启动嵌入式 WebSocket 服务器，`cowork-webapp` 扫 QR 直连。本文档描述两者之间的全部通信协议。
 
 相关源码：
-- Agent：`packages/cowork-agent/src/`（`schemas.ts` / `types.ts` / `wsServer.ts` / `auth.ts` / `sessionStore.ts` / `serve.ts`）
-- Webapp：`packages/cowork-webapp/src/directSocket.ts`
+- Agent：`packages/cowork-agent/src/`（`schemas.ts` / `types.ts` / `wsServer.ts` / `auth.ts` / `sessionStore.ts` / `sessionManager.ts` / `serve.ts`）
+- Webapp：`packages/cowork-webapp/src/session/client.ts`
 
 ---
 
-## 1. 协议阶段
+## 1. 连接与聊天两层 sessionId
+
+协议里有**两个独立的 sessionId**，一定要分清：
+
+| 名称 | 含义 | 生成方 | 出现位置 |
+|---|---|---|---|
+| **Connection sessionId** | 本次 cowork-agent serve 进程的身份（鉴权凭据绑定于此） | CLI 启动时生成并写入 `keysPath`，在 QR payload / credential 中出现 | `DirectQRPayload.sessionId` / `welcome.sessionId` / credential payload |
+| **Chat sessionId** | 一次聊天会话的身份（类似 IM 里一个聊天框），每个 chat session 有自己的 AI 子进程和独立 seq 空间 | `SessionManager.create()` 生成（UUID） | `message.sessionId` / `input.sessionId` / `session.*` RPC 的 params |
+
+**一个 connection 可以承载 ≤ `MAX_SESSIONS`（= 10）个 chat session**。每个 chat session：
+- 有独立的 `tool`（`claude` / `gemini`）和可选 `model`
+- 有独立的 SessionStore（循环缓冲 200 条事件）
+- 有独立的 seq 计数器（从 0 开始单调递增）
+- 有独立的 agent 子进程生命周期和 abort 控制
+
+---
+
+## 2. 协议阶段
 
 协议由两个严格分离的阶段组成，每条 WebSocket 连接都从 Phase 1 开始，握手成功后才进入 Phase 2。
 
 | 阶段 | 允许的入站消息 | 允许的出站消息 | 退出条件 |
 |---|---|---|---|
 | **Phase 1: 握手** | `hello`（首次或重连，二选一） | `welcome`（成功）/ `error` + close（失败） | 成功 → 进入 Phase 2；失败 → 连接关闭 |
-| **Phase 2: 会话** | `input` / `rpc` / `pong` | `message` / `rpc-response` / `ping` / `error` + close | 连接关闭 |
+| **Phase 2: 会话** | `input` / `rpc` / `pong` | `message` / `sessions` / `rpc-response` / `ping` / `error` + close | 连接关闭 |
 
 **严格校验**：agent 侧入站消息一律用 Zod schema 校验（见 `schemas.ts`）。任何不符合当前阶段 schema 的消息（包括跨阶段消息、额外字段、类型错误）一律回 `error` 并 `close`。这意味着：
 
@@ -23,24 +40,25 @@
 - Phase 2 不再接受 `hello`；重新认证必须重连。
 - 所有消息对象都是 `strict` 模式，多余字段会被拒绝（防止注入）。
 
-## 2. 消息类型一览
+## 3. 消息类型一览
 
 ### Webapp → Agent
 
 | type | 阶段 | 触发时机 |
 |---|---|---|
 | `hello` | Phase 1 | 连接建立后立即发送（首次扫码或带 credential 重连） |
-| `input` | Phase 2 | 用户发送消息给 agent（agent 会入 store 分配 seq 并回显，像 IM 一样记录用户侧发言） |
-| `rpc` | Phase 2 | 调用 agent 侧方法 |
+| `input` | Phase 2 | 用户在**某个 chat session** 里发送消息；agent 将其入对应 store 分配 seq 并回显 |
+| `rpc` | Phase 2 | 调用 agent 侧方法（包括所有 chat session 管理 RPC） |
 | `pong` | Phase 2 | 响应 agent 的 `ping` |
 
 ### Agent → Webapp
 
 | type | 阶段 | 触发时机 |
 |---|---|---|
-| `welcome` | Phase 1 末 | 握手验证通过 |
+| `welcome` | Phase 1 末 | 握手验证通过；内含当前全部 chat session 快照 |
 | `error` | 任意 | 握手失败 / schema 校验失败 / JSON 错误；发出后立即 `close` |
-| `message` | Phase 2 | 广播 agent 事件（延续 seq） |
+| `message` | Phase 2 | 广播某个 chat session 的事件（延续该 session 的 seq） |
+| `sessions` | Phase 2 | chat session 列表发生变化（创建 / 关闭）时主动推送 |
 | `ping` | Phase 2 | 每 30 秒心跳 |
 | `rpc-response` | Phase 2 | 响应 webapp 的 RPC 请求 |
 
@@ -48,19 +66,19 @@
 
 ---
 
-## 3. 首次连接握手
+## 4. 首次连接握手
 
 ```
 CLI                                          Webapp
 ────────────────────────────────────────────────────────────────
 
-generateCliKeys()                            扫描 QR 码
+generateCliKeys() (→ connection sessionId)   扫描 QR 码
 buildQRPayload(endpoint, keys, sessionId)    解析 qrPayload
 displayQRCode(qrJson)
 
 startWsServer(port=4000)
-                                             new WebSocket(endpoint)
-                                             ←── ws.onopen
+SessionManager.create({tool:'claude'})       new WebSocket(endpoint)
+  → chat session "abc-..." 产生                ←── ws.onopen
 
                                 ←── { type:'hello',
                                        nonce: qrPayload.nonce,
@@ -73,29 +91,37 @@ verifyNonce(nonce, qrPayload.nonce, nonceExpiry)
 issueCredential(webappPublicKey, sessionId, signSecretKey)
 
 ──► { type:'welcome',
-       sessionId,
-       currentSeq: store.getCurrentSeq(),
-       sessionCredential }
+       sessionId: <connection sessionId>,
+       sessionCredential,
+       sessions: [
+         { id:'abc-...', tool:'claude', model:null, cwd:'/…', createdAt:…, currentSeq:-1 },
+         ...
+       ] }
 
-──► { type:'message', seq:0, payload:... }   // delta（从头发送）
-──► { type:'message', seq:1, payload:... }
-    ...
+// 对 welcome.sessions 里的每个 chat session 依次 replay 全量事件：
+──► { type:'message', sessionId:'abc-...', seq:0, payload:... }
+──► { type:'message', sessionId:'abc-...', seq:1, payload:... }
+...
 
                                              收到 welcome → 存储 sessionCredential
+                                             sessions 进入 client.sessions
                                              setStatus('connected')
 ```
 
 ---
 
-## 4. 重连握手
+## 5. 重连握手
 
 ```
 CLI                                          Webapp
 ────────────────────────────────────────────────────────────────
 
-                                             TokenStorage.getDirectCredentials()
+                                             storage.loadCredentials()
                                              ← { endpoint, cliPublicKey,
-                                                 sessionCredential, lastSeq, ... }
+                                                 sessionCredential,
+                                                 lastSeqs: { 'abc-...': 5,
+                                                             'def-...': 12 },
+                                                 ... }
 
                                              new WebSocket(endpoint)
                                              ←── ws.onopen
@@ -103,38 +129,50 @@ CLI                                          Webapp
                                 ←── { type:'hello',
                                        sessionCredential,
                                        webappPublicKey,
-                                       lastSeq: 5 }
+                                       lastSeqs: { 'abc-...': 5,
+                                                   'def-...': 12 } }
 
 verifyCredential(credential, signPublicKey)
   ├─ 验证 Ed25519 签名
   ├─ Date.now() > payload.expiry ? → close('invalid credential')
-  └─ payload.sessionId !== sessionId ? → close('invalid credential')
+  └─ payload.sessionId !== connectionSessionId ? → close('invalid credential')
 
 ──► { type:'welcome',
-       sessionId,
-       currentSeq: 8,
-       sessionCredential }
+       sessionId: <connection sessionId>,
+       sessionCredential,
+       sessions: [
+         { id:'abc-...', tool:'claude', model:null, ..., currentSeq: 8 },
+         { id:'def-...', tool:'gemini', model:null, ..., currentSeq: 15 },
+         { id:'ghi-...', tool:'claude', model:null, ..., currentSeq: -1 }
+       ] }
 
-──► { type:'message', seq:6, payload:... }   // getDelta(5) → seq > 5
-──► { type:'message', seq:7, payload:... }
-──► { type:'message', seq:8, payload:... }
+// 对每个返回的 chat session，按 lastSeqs 取 delta（未出现过的 session 按 -1 = 全量）：
+──► { type:'message', sessionId:'abc-...', seq:6, payload:... }
+──► { type:'message', sessionId:'abc-...', seq:7, payload:... }
+──► { type:'message', sessionId:'abc-...', seq:8, payload:... }
+──► { type:'message', sessionId:'def-...', seq:13, payload:... }
+──► { type:'message', sessionId:'def-...', seq:14, payload:... }
+──► { type:'message', sessionId:'def-...', seq:15, payload:... }
+// ghi-... 是重连后才新建的 → 没出现在 lastSeqs → 按 fromSeq=-1 全量回放（本例为空）
 
-                                             更新 lastSeq = 8
+                                             更新 lastSeqs[sid] 逐条，持久化到 storage
                                              setStatus('connected')
 ```
+
+**断线期间 agent 新建的 chat session 也会出现在 welcome.sessions 里**；webapp 首次看到它们时 `lastSeqs` 里没有对应 key，自动按 `-1`（全量）回放。被关闭的 chat session 不再出现在 `welcome.sessions`，webapp 侧应相应从 `sessions` 列表中移除。
 
 重连策略（webapp 侧）：指数退避，初始 1s，最大 30s。
 
 ---
 
-## 5. QR Payload 结构
+## 6. QR Payload 结构
 
 ```ts
 interface DirectQRPayload {
   type: 'direct';
   endpoint: string;           // WebSocket 地址，如 "ws://192.168.1.100:4000"
   cliSignPublicKey: string;   // Base64(CLI Ed25519 公钥)，用于验证 credential 签名
-  sessionId: string;          // UUID
+  sessionId: string;          // Connection sessionId（UUID）
   nonce: string;              // Base64(32字节随机数)
   nonceExpiry: number;        // Unix 时间戳（ms），默认 5 分钟后过期
 }
@@ -151,9 +189,21 @@ interface DirectQRPayload {
 
 ---
 
-## 6. Agent 事件 Payload
+## 7. Chat Session 生命周期
 
-`message.payload` 的内容取决于 agent 类型。
+**启动时**：`serve.ts` 会根据 CLI 参数（`--claude` / `--gemini` / `--model`）自动 `manager.create(...)` 一个 chat session，使 `cowork-agent --gemini` 这种老用法在 webapp 未主动创建会话时也能直接有个聊天框可用。
+
+**运行时**：webapp 通过 `session.create` / `session.close` RPC 管理 chat session。每次成功 create/close 后，agent 会主动推送一条 `sessions` 消息（含最新完整列表）供 webapp 刷新侧边栏。
+
+**上限**：同一 connection 同时存活的 chat session 不能超过 `MAX_SESSIONS = 10`（`sessionManager.ts` 常量）。超出时 `session.create` 返回 `error: 'session limit reached (max 10)'`。
+
+**工作目录**：当前实现中所有 chat session 都使用 agent 进程的启动目录作为 `cwd`（`process.cwd()`）。每个 chat session 的 `cwd` 字段会出现在 `SessionMeta` 里供 webapp 展示。
+
+---
+
+## 8. Agent 事件 Payload
+
+`message.payload` 的内容取决于该 chat session 的 agent 类型。消息的 `sessionId` 字段告诉 webapp 这条事件属于哪个聊天框。
 
 ### Claude（stream-json 格式）
 
@@ -185,10 +235,13 @@ interface DirectQRPayload {
 Gemini ACP 事件经 `geminiAcp.ts` 转换为兼容 Claude 格式：
 
 ```ts
-// 文本输出（accumulated after idle）
+// 文本输出 — 进度式 delta（_delta:true）+ 收尾标记（_final:true）
 {
   type: 'assistant';
-  message: { role: 'assistant'; content: [{ type: 'text'; text: string }] }
+  message: { role: 'assistant'; content: [{ type: 'text'; text: string }] };
+  _delta?: boolean;
+  _final?: boolean;
+  _streamId?: string;
 }
 
 // 工具调用
@@ -197,57 +250,64 @@ Gemini ACP 事件经 `geminiAcp.ts` 转换为兼容 Claude 格式：
   message: { role: 'assistant'; content: [{ type: 'tool_use'; id: string; name: string; input: unknown }] }
 }
 
-// Turn 结束（serve.ts 在 session/prompt 完成后广播）
+// Turn 结束（SessionManager 在 prompt 完成后广播）
 { type: 'result'; subtype: 'success'; result: 'Done' }
 
-// 权限请求（Gemini 专属，见第 7 节）
+// 权限请求（Gemini 专属，见第 9 节）
 {
   type: 'permission-request';
-  permissionId: string;   // UUID，用于 permissionResponse RPC 关联
-  toolName: string;       // 工具名，如 'bash'
-  input: unknown;         // 工具调用参数
+  permissionId: string;   // UUID，用于 session.permissionResponse RPC 关联
+  toolName: string;
+  input: unknown;
+}
+```
+
+### 用户事件（`input` 回显）
+
+```ts
+{
+  type: 'user';
+  message: { role: 'user'; content: string }
 }
 ```
 
 ---
 
-## 7. 权限请求流程（Gemini）
+## 9. 权限请求流程（Gemini）
 
-Gemini 执行工具前会向 CLI 发起 `session/request_permission` ACP 请求，CLI 将其转发到 webapp。
+Gemini 执行工具前会向 CLI 发起 `session/request_permission` ACP 请求，CLI 将其包装成事件广播给 webapp。
 
 ```
-Gemini                CLI                              Webapp
+Gemini                SessionManager                       Webapp
 ──────────────────────────────────────────────────────────────────
 
 ──► session/request_permission
       {toolCall: {title:'bash',...}, options:[...]}
 
-    生成 permissionId = randomUUID()
-    permissionPending.set(permissionId, resolve)
-    broadcast({
+    permissionId = randomUUID()
+    entry.permissionPending.set(permissionId, resolve)
+    appendAndBroadcast(sid, {
       type: 'permission-request',
       permissionId,
       toolName: 'bash',
       input: toolCall
     })
-
                                   收到 message.payload.type === 'permission-request'
                                   显示对话框：工具名 + 参数 + [允许]/[拒绝]
-
                                   用户点击 [允许]
 
                       ←── { type:'rpc', id:'xxx',
-                              method:'permissionResponse',
-                              params:{ permissionId, approved: true } }
+                              method:'session.permissionResponse',
+                              params:{ sessionId, permissionId, approved: true } }
 
-    resolver = permissionPending.get(permissionId)
+    manager.permissionResponse(sid, permissionId, true)
     resolver(true)
     sendRpcResponse(id, {ok:true})
 
                                   ──► { type:'rpc-response', id:'xxx', result:{ok:true} }
 
     write({jsonrpc:'2.0', id:msgId,
-           result:{optionId:'proceed_always'}})  // 或 'cancel'
+           result:{optionId:'proceed_always'}})
 
 ◄── result: {optionId: 'proceed_always'}
     继续执行工具
@@ -255,32 +315,104 @@ Gemini                CLI                              Webapp
 
 ---
 
-## 8. RPC 方法
+## 10. RPC 方法
 
-所有 RPC 调用均为 webapp → CLI 方向，30 秒超时。
+所有 RPC 调用均为 webapp → CLI 方向，30 秒超时。Chat session 管理相关 RPC 全部以 `session.` 前缀命名。
 
-### `abort`
+### `session.list`
 
-终止当前正在运行的 agent（Claude 子进程或 Gemini ACP session）。
+列出当前 connection 上所有 chat session。
 
 ```ts
 // 请求
-{ type: 'rpc', id, method: 'abort', params: {} }
+{ type: 'rpc', id, method: 'session.list', params: {} }
 
 // 响应
-{ type: 'rpc-response', id, result: { ok: true } }
+{ type: 'rpc-response', id, result: { sessions: SessionMeta[] } }
 ```
 
-### `permissionResponse`
+### `session.create`
 
-响应 Gemini 权限请求（见第 7 节）。
+创建新的 chat session。
 
 ```ts
 // 请求
 {
   type: 'rpc', id,
-  method: 'permissionResponse',
-  params: { permissionId: string; approved: boolean }
+  method: 'session.create',
+  params: {
+    tool: 'claude' | 'gemini';
+    model?: string;
+    agentArgs?: string[];
+  }
+}
+
+// 成功响应
+{ type: 'rpc-response', id, result: { session: SessionMeta } }
+
+// 失败响应（超出上限或参数错误）
+{ type: 'rpc-response', id, error: 'session limit reached (max 10)' }
+{ type: 'rpc-response', id, error: 'tool must be "claude" or "gemini"' }
+```
+
+创建成功后，agent 也会主动推送一条 `sessions` 消息（含新完整列表）。
+
+### `session.close`
+
+关闭 chat session：中止子进程、从列表移除。
+
+```ts
+// 请求
+{ type: 'rpc', id, method: 'session.close', params: { sessionId: string } }
+
+// 响应
+{ type: 'rpc-response', id, result: { ok: boolean } }  // ok=false 表示不存在
+```
+
+关闭成功后，agent 也会主动推送一条 `sessions` 消息。
+
+### `session.abort`
+
+中止指定 chat session 当前正在运行的 agent turn，但**不关闭 session**。
+
+```ts
+// 请求
+{ type: 'rpc', id, method: 'session.abort', params: { sessionId: string } }
+
+// 响应
+{ type: 'rpc-response', id, result: { ok: true } }
+```
+
+### `session.replay`
+
+主动请求某个 chat session 从 `fromSeq`（不含）开始的全部事件；agent 会通过 `message` 逐条推送，最后回 `rpc-response` 告知本次推送条数。
+
+```ts
+// 请求
+{
+  type: 'rpc', id,
+  method: 'session.replay',
+  params: { sessionId: string; fromSeq?: number }  // 缺省 = -1（全量）
+}
+
+// 响应（在推送完全部 delta 之后发送）
+{ type: 'rpc-response', id, result: { ok: true, count: number } }
+```
+
+### `session.permissionResponse`
+
+响应 Gemini 权限请求（见第 9 节）。
+
+```ts
+// 请求
+{
+  type: 'rpc', id,
+  method: 'session.permissionResponse',
+  params: {
+    sessionId: string;
+    permissionId: string;
+    approved: boolean;
+  }
 }
 
 // 响应
@@ -289,24 +421,17 @@ Gemini                CLI                              Webapp
 
 ### `getLogs`
 
-获取 CLI serve 日志。
+获取 CLI serve 日志（与 chat session 无关，按 connection 作用域）。
 
 ```ts
 // 请求
-{
-  type: 'rpc', id,
-  method: 'getLogs',
-  params: { lines?: string }  // 默认 '200'
-}
+{ type: 'rpc', id, method: 'getLogs', params: { lines?: number } }
 
 // 响应（成功）
-{
-  type: 'rpc-response', id,
-  result: { lines: string[]; logPath: string }
-}
+{ type: 'rpc-response', id, result: { lines: string[]; logPath: string } }
 
 // 响应（失败）
-{ type: 'rpc-response', id, error: 'log file not found' }
+{ type: 'rpc-response', id, result: { lines: []; logPath: string } }
 ```
 
 ### 未知方法
@@ -317,13 +442,14 @@ Gemini                CLI                              Webapp
 
 ---
 
-## 9. SessionStore 与 Delta Sync
+## 11. SessionStore 与 Delta Sync（per-chat-session）
 
-CLI 使用循环缓冲区（默认 200 条）保存所有广播事件，支持断线重连后的增量同步。
+**每个 chat session 拥有独立的 SessionStore**（循环缓冲，默认 200 条）和独立的 `seq` 计数器。重连时按 session 分别取 delta。
 
-**消息空间是统一的**：agent 自身产生的事件 和 webapp 发来的 `input`（被 agent 包装为 `{ type: 'user', message: { role: 'user', content } }` 事件）共享同一 `seq` 空间，按时间顺序单调递增。这与聊天工具（IM）一致——每条消息都有唯一编号，重连时 delta 可取回完整双向聊天记录。
+**消息空间是统一的（按 chat session 内）**：agent 自身产生的事件 和 webapp 发来的 `input`（被 agent 包装为 `{ type: 'user', message: { role: 'user', content } }` 事件）共享同一个 chat session 的 `seq` 空间，按时间顺序单调递增。这与聊天工具（IM）一致——每条消息都有唯一编号，重连时 delta 可取回完整双向聊天记录。
 
 ```
+// 每个 SessionEntry 各自持有：
 append(payload)
   └─ seq = nextSeq++
      entries.push({seq, payload})
@@ -337,11 +463,11 @@ getDelta(fromSeq)
      // fromSeq 超出缓冲区范围 → 返回现有全部（静默丢弃间隙）
 ```
 
-**Webapp 侧维护 `lastSeq`**，每次收到 `message` 后更新并持久化到 `localStorage`，重连时随 `hello` 发送。
+**Webapp 侧维护 `lastSeqs: Record<chatSessionId, number>`**，每次收到 `message` 后更新对应 key 并持久化到 `storage.saveCredentials({...stored, lastSeqs})`，重连时随 `hello` 发送。
 
 ---
 
-## 10. 认证与加密
+## 12. 认证与加密
 
 ### 密钥体系
 
@@ -358,7 +484,7 @@ getDelta(fromSeq)
 // payload（JSON 序列化后签名）
 {
   webappPublicKey: string;  // Base64，来自 webapp
-  sessionId: string;        // 来自 QR
+  sessionId: string;        // Connection sessionId（来自 QR）
   expiry: number;           // Date.now() + 30天
 }
 
@@ -382,12 +508,12 @@ getDelta(fromSeq)
 
 ---
 
-## 11. 心跳
+## 13. 心跳
 
 CLI 每 30 秒向当前连接的 client 发送 `ping`，webapp 收到后立即回复 `pong`。若连接断开，CLI 侧清除计时器；webapp 侧通过 `ws.onclose` 触发重连逻辑（不依赖心跳超时判活）。
 
 ---
 
-## 12. 单客户端限制
+## 14. 单客户端限制
 
-CLI 同一时间只允许一个 webapp 连接。新连接到达时，CLI 会强制关闭旧连接（`ws.close(1000, 'replaced')`），然后完成新连接的握手。
+CLI 同一时间只允许一个 webapp 连接。新连接到达时，CLI 会强制关闭旧连接（`ws.close(1000, 'replaced')`），然后完成新连接的握手。Chat session 的 AI 子进程**不受客户端切换影响**——它们属于 connection / SessionManager，webapp 断开期间 session 继续运行，重连时通过 delta sync 补齐事件。

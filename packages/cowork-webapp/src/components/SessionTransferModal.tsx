@@ -47,7 +47,18 @@ export function SessionTransferModal({ onClose, onImported }: Props) {
             return;
         }
 
-        const imported = { ...creds, lastSeq: (creds['lastSeq'] as number) ?? -1 } as StoredCredentials;
+        const rawLastSeqs =
+            creds['lastSeqs'] && typeof creds['lastSeqs'] === 'object'
+                ? (creds['lastSeqs'] as Record<string, number>)
+                : {};
+        const imported: StoredCredentials = {
+            endpoint: String(creds['endpoint']),
+            cliPublicKey: String(creds['cliPublicKey'] ?? ''),
+            sessionId: String(creds['sessionId'] ?? ''),
+            sessionCredential: String(creds['sessionCredential']),
+            webappPublicKey: String(creds['webappPublicKey']),
+            lastSeqs: rawLastSeqs,
+        };
         sessionClient.disconnect();
         sessionClient.importCredentials(imported);
         onImported();

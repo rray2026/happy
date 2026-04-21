@@ -13,7 +13,6 @@ function resolveHome(): string {
 export const homeDir = resolveHome();
 export const logsDir = join(homeDir, 'logs');
 export const keysPath = join(homeDir, 'serve-keys.json');
-export const statePath = join(homeDir, 'serve-state.json');
 
 if (!existsSync(homeDir)) mkdirSync(homeDir, { recursive: true });
 if (!existsSync(logsDir)) mkdirSync(logsDir, { recursive: true });

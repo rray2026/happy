@@ -22,11 +22,15 @@ describe('E2E: webapp SessionClient ↔ agent WebSocket server', () => {
         const saved = storage.loadCredentials();
         expect(saved).not.toBeNull();
         expect(saved?.endpoint).toBe(rig.endpoint);
-        expect(saved?.sessionId).toBe(rig.sessionId);
+        expect(saved?.sessionId).toBe(rig.connectionSessionId);
         expect(saved?.webappPublicKey).toBe('wa-pub');
         // credential is a JSON string containing { payload, signature }
         expect(saved?.sessionCredential).toMatch(/"signature"/);
-        expect(client.getLastSeq()).toBe(-1); // no messages yet
+        // No messages yet for the auto-created chat session.
+        expect(client.getLastSeq(rig.chatSessionId)).toBe(-1);
+
+        // welcome.sessions carries the auto-created chat session metadata.
+        expect(client.getSessions().map((s) => s.id)).toEqual([rig.chatSessionId]);
 
         client.disconnect();
     });
@@ -45,49 +49,64 @@ describe('E2E: webapp SessionClient ↔ agent WebSocket server', () => {
 
     // ── User input recording (the IM-style behavior) ──────────────────────────
 
-    it('user input round-trip: client sendInput → agent records + echoes → client sees user-event at seq=0', async () => {
+    it('user input round-trip: client sendInput reaches agent (agent stores + echoes via handleInput in prod, recorded here)', async () => {
         const { client } = rig.makeClient();
-        const received: Array<{ payload: unknown; seq: number }> = [];
-        client.onMessage((payload, seq) => received.push({ payload, seq }));
+        const received: Array<{ sessionId: string; payload: unknown; seq: number }> = [];
+        client.onMessage((sessionId, payload, seq) =>
+            received.push({ sessionId, payload, seq }),
+        );
 
         client.connectFirstTime(rig.qrPayload, 'wa-pub');
         await waitForStatus(client, 'connected');
 
-        client.sendInput('hello agent');
-
-        await waitFor(() => received.length >= 1);
+        client.sendInput(rig.chatSessionId, 'hello agent');
+        await waitFor(() => rig.inputs.length >= 1);
         expect(rig.inputs).toEqual(['hello agent']);
+
+        // Since the E2E rig intentionally bypasses the manager's handleInput
+        // (to avoid spawning a real Claude subprocess), we synthesize the
+        // user-event broadcast that production would emit.
+        rig.pushChatEvent({
+            type: 'user',
+            message: { role: 'user', content: 'hello agent' },
+        });
+        await waitFor(() => received.length >= 1);
+
         expect(received[0]).toEqual({
+            sessionId: rig.chatSessionId,
             seq: 0,
             payload: { type: 'user', message: { role: 'user', content: 'hello agent' } },
         });
-        expect(client.getLastSeq()).toBe(0);
+        expect(client.getLastSeq(rig.chatSessionId)).toBe(0);
 
         client.disconnect();
     });
 
-    it('seq space is unified: user input and agent broadcasts increment the same counter', async () => {
+    it('seq is per-session: interleaved broadcasts in the same chat increment one counter', async () => {
         const { client } = rig.makeClient();
-        const received: Array<{ payload: unknown; seq: number }> = [];
-        client.onMessage((payload, seq) => received.push({ payload, seq }));
+        const received: Array<{ sessionId: string; payload: unknown; seq: number }> = [];
+        client.onMessage((sessionId, payload, seq) =>
+            received.push({ sessionId, payload, seq }),
+        );
 
         client.connectFirstTime(rig.qrPayload, 'wa-pub');
         await waitForStatus(client, 'connected');
 
-        client.sendInput('first'); // seq 0
+        rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'first' } }); // seq 0
         await waitFor(() => received.length >= 1);
 
-        rig.server.broadcast({ type: 'assistant', message: { role: 'assistant', content: 'ok' } }); // seq 1
+        rig.pushChatEvent({ type: 'assistant', message: { role: 'assistant', content: 'ok' } }); // seq 1
         await waitFor(() => received.length >= 2);
 
-        client.sendInput('second'); // seq 2
+        rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'second' } }); // seq 2
         await waitFor(() => received.length >= 3);
 
         expect(received.map((r) => r.seq)).toEqual([0, 1, 2]);
+        expect(received.every((r) => r.sessionId === rig.chatSessionId)).toBe(true);
         expect(received[0].payload).toMatchObject({ type: 'user' });
         expect(received[1].payload).toMatchObject({ type: 'assistant' });
         expect(received[2].payload).toMatchObject({ type: 'user' });
-        expect(client.getLastSeq()).toBe(2);
+        expect(client.getLastSeq(rig.chatSessionId)).toBe(2);
 
         client.disconnect();
     });
@@ -97,12 +116,12 @@ describe('E2E: webapp SessionClient ↔ agent WebSocket server', () => {
     it('reconnect delta: client receives only missing messages after disconnect', async () => {
         const { client, storage } = rig.makeClient();
         const received: number[] = [];
-        client.onMessage((_p, seq) => received.push(seq));
+        client.onMessage((_sid, _p, seq) => received.push(seq));
 
         client.connectFirstTime(rig.qrPayload, 'wa-pub');
         await waitForStatus(client, 'connected');
 
-        client.sendInput('live'); // seq 0
+        rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'live' } }); // seq 0
         await waitFor(() => received.length >= 1);
 
         // Disconnect; save the creds the client persisted.
@@ -111,20 +130,21 @@ describe('E2E: webapp SessionClient ↔ agent WebSocket server', () => {
         client.disconnect();
 
         // Agent produces more events while the client is offline.
-        rig.server.broadcast({ type: 'tool_use', id: 'x', name: 'Read' }); // seq 1
-        rig.server.broadcast({ type: 'assistant', text: 'done' }); // seq 2
+        rig.pushChatEvent({ type: 'tool_use', id: 'x', name: 'Read' }); // seq 1
+        rig.pushChatEvent({ type: 'assistant', text: 'done' }); // seq 2
 
         // New client reconnects from stored credentials.
         const resumed = rig.makeClient(saved);
-        const replayed: number[] = [];
-        resumed.client.onMessage((_p, seq) => replayed.push(seq));
+        const replayed: Array<{ sessionId: string; seq: number }> = [];
+        resumed.client.onMessage((sid, _p, seq) => replayed.push({ sessionId: sid, seq }));
         resumed.client.connectFromStored(saved as StoredCredentials);
         await waitForStatus(resumed.client, 'connected');
 
         // Only the two messages emitted while offline should arrive — not seq 0.
         await waitFor(() => replayed.length >= 2);
-        expect(replayed).toEqual([1, 2]);
-        expect(resumed.client.getLastSeq()).toBe(2);
+        expect(replayed.map((r) => r.seq)).toEqual([1, 2]);
+        expect(replayed.every((r) => r.sessionId === rig.chatSessionId)).toBe(true);
+        expect(resumed.client.getLastSeq(rig.chatSessionId)).toBe(2);
 
         resumed.client.disconnect();
     });

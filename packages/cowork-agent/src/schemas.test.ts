@@ -11,12 +11,22 @@ describe('HandshakeInboundSchema', () => {
         expect(ok.success).toBe(true);
     });
 
-    it('accepts reconnect hello', () => {
+    it('accepts reconnect hello with per-session lastSeqs map', () => {
         const ok = HandshakeInboundSchema.safeParse({
             type: 'hello',
             sessionCredential: '{"payload":"x","signature":"y"}',
             webappPublicKey: 'pk',
-            lastSeq: 42,
+            lastSeqs: { 'sess-1': 42, 'sess-2': -1 },
+        });
+        expect(ok.success).toBe(true);
+    });
+
+    it('accepts reconnect hello with empty lastSeqs object', () => {
+        const ok = HandshakeInboundSchema.safeParse({
+            type: 'hello',
+            sessionCredential: 'c',
+            webappPublicKey: 'pk',
+            lastSeqs: {},
         });
         expect(ok.success).toBe(true);
     });
@@ -53,13 +63,13 @@ describe('HandshakeInboundSchema', () => {
         ).toBe(false);
     });
 
-    it('rejects reconnect hello with non-int lastSeq', () => {
+    it('rejects reconnect hello with non-int lastSeqs values', () => {
         expect(
             HandshakeInboundSchema.safeParse({
                 type: 'hello',
                 sessionCredential: 'c',
                 webappPublicKey: 'pk',
-                lastSeq: 1.5,
+                lastSeqs: { A: 1.5 },
             }).success,
         ).toBe(false);
     });
@@ -88,12 +98,26 @@ describe('HandshakeInboundSchema', () => {
 });
 
 describe('SessionInboundSchema', () => {
-    it('accepts input', () => {
-        expect(SessionInboundSchema.safeParse({ type: 'input', text: 'hi' }).success).toBe(true);
+    it('accepts input with sessionId', () => {
+        expect(
+            SessionInboundSchema.safeParse({ type: 'input', sessionId: 's1', text: 'hi' }).success,
+        ).toBe(true);
     });
 
-    it('accepts empty-string input (protocol does not enforce non-empty)', () => {
-        expect(SessionInboundSchema.safeParse({ type: 'input', text: '' }).success).toBe(true);
+    it('accepts empty-string text (protocol does not enforce non-empty)', () => {
+        expect(
+            SessionInboundSchema.safeParse({ type: 'input', sessionId: 's1', text: '' }).success,
+        ).toBe(true);
+    });
+
+    it('rejects input without sessionId', () => {
+        expect(SessionInboundSchema.safeParse({ type: 'input', text: 'hi' }).success).toBe(false);
+    });
+
+    it('rejects input with empty sessionId', () => {
+        expect(
+            SessionInboundSchema.safeParse({ type: 'input', sessionId: '', text: 'hi' }).success,
+        ).toBe(false);
     });
 
     it('accepts rpc with any params shape', () => {
@@ -101,7 +125,7 @@ describe('SessionInboundSchema', () => {
             SessionInboundSchema.safeParse({
                 type: 'rpc',
                 id: 'r1',
-                method: 'abort',
+                method: 'session.list',
                 params: {},
             }).success,
         ).toBe(true);
@@ -149,9 +173,7 @@ describe('SessionInboundSchema', () => {
     });
 
     it('rejects unknown message type', () => {
-        expect(
-            SessionInboundSchema.safeParse({ type: 'haxx', evil: true }).success,
-        ).toBe(false);
+        expect(SessionInboundSchema.safeParse({ type: 'haxx', evil: true }).success).toBe(false);
     });
 
     it('rejects pong with extra fields (strict mode)', () => {
@@ -159,11 +181,15 @@ describe('SessionInboundSchema', () => {
     });
 
     it('rejects input without text field', () => {
-        expect(SessionInboundSchema.safeParse({ type: 'input' }).success).toBe(false);
+        expect(SessionInboundSchema.safeParse({ type: 'input', sessionId: 's' }).success).toBe(false);
     });
 
     it('rejects input with non-string text', () => {
-        expect(SessionInboundSchema.safeParse({ type: 'input', text: 42 }).success).toBe(false);
-        expect(SessionInboundSchema.safeParse({ type: 'input', text: null }).success).toBe(false);
+        expect(
+            SessionInboundSchema.safeParse({ type: 'input', sessionId: 's', text: 42 }).success,
+        ).toBe(false);
+        expect(
+            SessionInboundSchema.safeParse({ type: 'input', sessionId: 's', text: null }).success,
+        ).toBe(false);
     });
 });

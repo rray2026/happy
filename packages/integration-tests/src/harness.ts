@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket as NodeWs } from 'ws';
-import { wireAgentToServer, type AgentType, type WireHandle } from '../../cowork-agent/src/assemble.js';
 import { buildQRPayload, generateCliKeys } from '../../cowork-agent/src/auth.js';
+import { SessionManager, type Tool } from '../../cowork-agent/src/sessionManager.js';
 import { startWsServer } from '../../cowork-agent/src/wsServer.js';
 import type { CliKeys, WsServerHandle } from '../../cowork-agent/src/types.js';
 import { SessionClient } from '../../cowork-webapp/src/session/client';
@@ -17,22 +17,35 @@ export const FAKE_CLAUDE = join(FIXTURES_DIR, 'fake-claude.mjs');
 export const FAKE_GEMINI = join(FIXTURES_DIR, 'fake-gemini-acp.mjs');
 
 /**
- * A full vertical slice: real agent WebSocket server + real webapp SessionClient
- * connected via the `ws` library (Node's WebSocket). No fakes in between.
+ * A full vertical slice: real agent WebSocket server + a real SessionManager +
+ * real webapp SessionClient, all wired via Node's WebSocket (`ws`). No fakes
+ * between the agent and the client.
+ *
+ * One chat session is auto-created at startup so tests don't need to go through
+ * the `session.create` RPC to have a target for `sendInput` and server pushes.
  */
 export interface E2ERig {
     server: WsServerHandle;
+    manager: SessionManager;
     endpoint: string;
-    sessionId: string;
+    /** Connection-level session id (auth). */
+    connectionSessionId: string;
+    /** Chat session id of the auto-created session. */
+    chatSessionId: string;
     cliKeys: CliKeys;
     /** QR payload with the actual bound endpoint; hand to `connectFirstTime`. */
     qrPayload: DirectQRPayload;
-    /** Collected `input.text` values seen by the agent. */
+    /** Collected `input.text` values seen by the agent (for the auto-created chat session). */
     inputs: string[];
     /** Collected rpc calls seen by the agent. */
     rpcCalls: Array<{ id: string; method: string; params: unknown }>;
     /** Optional custom rpc responder — defaults to echoing `{ ok: true }`. */
     setRpcResponder(fn: (id: string, method: string, params: unknown) => void): void;
+    /**
+     * Inject a synthetic agent event into the auto-created chat session's
+     * stream. Assigns the next seq and pushes to the connected client.
+     */
+    pushChatEvent(payload: unknown): void;
     makeClient(seedCreds?: StoredCredentials | null): {
         client: SessionClient;
         storage: CredentialStorage;
@@ -40,46 +53,76 @@ export interface E2ERig {
     dispose(): Promise<void>;
 }
 
-export async function startRig(): Promise<E2ERig> {
+export async function startRig(opts: { tool?: Tool } = {}): Promise<E2ERig> {
     const cliKeys = generateCliKeys();
-    const sessionId = cliKeys.sessionId;
+    const connectionSessionId = cliKeys.sessionId;
     const inputs: string[] = [];
     const rpcCalls: Array<{ id: string; method: string; params: unknown }> = [];
     // The QR payload is handed to startWsServer *before* we know the real port —
     // the server only uses `nonce`/`nonceExpiry` from it, so the endpoint field
     // is cosmetic here and we overwrite it for the client below.
-    const qrPayloadForServer = buildQRPayload('ws://127.0.0.1:0', cliKeys, sessionId);
+    const qrPayloadForServer = buildQRPayload('ws://127.0.0.1:0', cliKeys, connectionSessionId);
 
     let rpcResponder: (id: string, method: string, params: unknown) => void = (id) => {
         server.sendRpcResponse(id, { ok: true });
     };
 
-    const server = startWsServer({
+    let server!: WsServerHandle;
+
+    const manager = new SessionManager({
+        cwd: process.cwd(),
+        onBroadcast: (sid, seq, payload) => server.pushMessage(sid, seq, payload),
+        onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
+    });
+
+    server = startWsServer({
         port: 0,
         host: '127.0.0.1',
-        sessionId,
+        sessionId: connectionSessionId,
         cliKeys,
         qrPayload: qrPayloadForServer,
-        onInput: (text) => inputs.push(text),
+        listSessions: () => manager.list(),
+        replayFrom: (sid, fromSeq) => manager.replayFrom(sid, fromSeq),
+        // NOTE: we intentionally do NOT dispatch to SessionManager here. The unit
+        // tests drive the stream themselves via `pushChatEvent`, and we only
+        // want to observe what the *client* sent.
+        onInput: (_sid, text) => inputs.push(text),
         onRpc: async (id, method, params) => {
             rpcCalls.push({ id, method, params });
             rpcResponder(id, method, params);
         },
     });
     await server.ready();
+
+    // Auto-create one chat session so tests have a stable target. Must happen
+    // after `server` is assigned: create() fires onSessionsChanged, which
+    // closes over `server`.
+    const chat = manager.create({ tool: opts.tool ?? 'claude' });
+    const chatSessionId = chat.id;
     const port = server.port();
     const endpoint = `ws://127.0.0.1:${port}`;
     const qrPayload: DirectQRPayload = { ...qrPayloadForServer, endpoint };
 
     return {
         server,
+        manager,
         endpoint,
-        sessionId,
+        connectionSessionId,
+        chatSessionId,
         cliKeys,
         qrPayload,
         inputs,
         rpcCalls,
         setRpcResponder(fn) { rpcResponder = fn; },
+        pushChatEvent(payload: unknown) {
+            // The manager's public API only appends via `handleInput` (which
+            // would spawn a real CLI subprocess) or via CLI event callbacks.
+            // For unit tests we want to synthesize agent events directly, so
+            // reach through the manager's private `sessions` map.
+            injectEvent(manager, chatSessionId, payload, (sid, seq, p) =>
+                server.pushMessage(sid, seq, p),
+            );
+        },
         makeClient(seedCreds = null) {
             const storage = createMemoryStorage({
                 creds: seedCreds,
@@ -96,9 +139,31 @@ export async function startRig(): Promise<E2ERig> {
             return { client, storage };
         },
         async dispose() {
+            manager.dispose();
             server.close();
         },
     };
+}
+
+/**
+ * Internal test-only hook: append a synthetic event to a session's store and
+ * broadcast it. Reaches through the SessionManager's private `sessions` map
+ * via a cast; in production code we'd route through `handleInput`, but that
+ * spawns a real Claude subprocess.
+ */
+function injectEvent(
+    manager: SessionManager,
+    sessionId: string,
+    payload: unknown,
+    broadcast: (sid: string, seq: number, payload: unknown) => void,
+): void {
+    const internal = manager as unknown as {
+        sessions: Map<string, { store: { append: (p: unknown) => number } }>;
+    };
+    const entry = internal.sessions.get(sessionId);
+    if (!entry) throw new Error(`injectEvent: unknown session ${sessionId}`);
+    const seq = entry.store.append(payload);
+    broadcast(sessionId, seq, payload);
 }
 
 // ── Small async helpers ────────────────────────────────────────────────────────
@@ -150,13 +215,9 @@ export function waitFor<T>(
 // ── CLI end-to-end rig (fake claude / fake gemini → wsServer → webapp) ─────────
 
 export interface CliRigOptions {
-    agent: AgentType;
+    agent: Tool;
     /** JSON script consumed by the fake CLI script. */
     cliScript: unknown;
-    /** Pre-existing gemini session id to resume (only meaningful for gemini). */
-    resumeSessionId?: string;
-    /** When true, the fake gemini accepts `session/load` (else returns error). */
-    acpLoadOk?: boolean;
     /** Override the claude binary (default: fake-claude.mjs). */
     claudeCommand?: string;
     /** Override the gemini binary (default: fake-gemini-acp.mjs). */
@@ -166,11 +227,13 @@ export interface CliRigOptions {
 export interface CliRig {
     endpoint: string;
     server: WsServerHandle;
+    manager: SessionManager;
     client: SessionClient;
     storage: CredentialStorage;
-    wire: WireHandle;
+    /** Chat session id of the auto-created session (target for `sendInput`). */
+    chatSessionId: string;
     /** Every event the client sees, in order. */
-    events: Array<{ payload: unknown; seq: number }>;
+    events: Array<{ sessionId: string; payload: unknown; seq: number }>;
     /** Webapp-layer UI items produced by eventToItems + mergeItems. */
     items: Item[];
     sendInput(text: string): void;
@@ -182,11 +245,15 @@ export interface CliRig {
  * real wsServer to a real webapp SessionClient, and also runs the webapp-side
  * event reducer (eventToItems + mergeItems) so tests can assert both the
  * protocol layer (`events`) and the rendering layer (`items`).
+ *
+ * The fake CLI is driven through a real `SessionManager` — the rig creates
+ * exactly one chat session at startup (the only target for `sendInput`).
+ * Callers wanting multi-session scenarios can reach into `rig.manager`.
  */
 export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
     const cliKeys = generateCliKeys();
-    const { sessionId } = cliKeys;
-    const qrPayloadForServer = buildQRPayload('ws://127.0.0.1:0', cliKeys, sessionId);
+    const { sessionId: connectionSessionId } = cliKeys;
+    const qrPayloadForServer = buildQRPayload('ws://127.0.0.1:0', cliKeys, connectionSessionId);
 
     // Write the CLI script to a tmp file the fake binary reads via env.
     const tmpRoot = mkdtempSync(join(tmpdir(), 'cowork-cli-rig-'));
@@ -198,40 +265,47 @@ export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
     const claudeExtraEnv =
         opts.agent === 'claude' ? { FAKE_CLI_SCRIPT: scriptFile } : undefined;
     const geminiExtraEnv =
-        opts.agent === 'gemini'
-            ? {
-                  FAKE_ACP_SCRIPT: scriptFile,
-                  ...(opts.acpLoadOk ? { FAKE_ACP_LOAD_OK: '1' } : {}),
-              }
-            : undefined;
+        opts.agent === 'gemini' ? { FAKE_ACP_SCRIPT: scriptFile } : undefined;
 
-    let wire!: WireHandle;
-    const server = startWsServer({
-        port: 0,
-        host: '127.0.0.1',
-        sessionId,
-        cliKeys,
-        qrPayload: qrPayloadForServer,
-        onInput: (text) => {
-            wire.handleInput(text).catch(() => {
-                /* errors surface via the result event broadcast */
-            });
-        },
-        onRpc: (id, method, params) => wire.handleRpc(id, method, params),
-    });
-    await server.ready();
-    const endpoint = `ws://127.0.0.1:${server.port()}`;
-    const qrPayload: DirectQRPayload = { ...qrPayloadForServer, endpoint };
+    let server!: WsServerHandle;
 
-    wire = wireAgentToServer({
-        agent: opts.agent,
-        server,
-        resumeSessionId: opts.resumeSessionId,
+    const manager = new SessionManager({
+        cwd: process.cwd(),
+        onBroadcast: (sid, seq, payload) => server.pushMessage(sid, seq, payload),
+        onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
         claudeCommand,
         claudeExtraEnv,
         geminiCommand,
         geminiExtraEnv,
     });
+
+    server = startWsServer({
+        port: 0,
+        host: '127.0.0.1',
+        sessionId: connectionSessionId,
+        cliKeys,
+        qrPayload: qrPayloadForServer,
+        listSessions: () => manager.list(),
+        replayFrom: (sid, fromSeq) => manager.replayFrom(sid, fromSeq),
+        onInput: (sid, text) => {
+            manager.handleInput(sid, text).catch(() => {
+                /* errors surface via the result event broadcast */
+            });
+        },
+        onRpc: async (id, method) => {
+            // The CLI rig doesn't exercise RPC methods; reply with a no-op.
+            server.sendRpcResponse(id, { ok: true, method });
+        },
+    });
+    await server.ready();
+    const endpoint = `ws://127.0.0.1:${server.port()}`;
+    const qrPayload: DirectQRPayload = { ...qrPayloadForServer, endpoint };
+
+    // Create the single chat session backing the fake CLI. Must happen AFTER
+    // `server` is assigned — manager.create() fires onSessionsChanged, which
+    // closes over `server`.
+    const chat = manager.create({ tool: opts.agent });
+    const chatSessionId = chat.id;
 
     const storage = createMemoryStorage({ creds: null, webappKey: 'wa-pub' });
     const client = new SessionClient({
@@ -243,10 +317,11 @@ export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
         rpcTimeoutMs: 2_000,
     });
 
-    const events: Array<{ payload: unknown; seq: number }> = [];
+    const events: Array<{ sessionId: string; payload: unknown; seq: number }> = [];
     let items: Item[] = [];
-    client.onMessage((payload, seq) => {
-        events.push({ payload, seq });
+    client.onMessage((sid, payload, seq) => {
+        if (sid !== chatSessionId) return;
+        events.push({ sessionId: sid, payload, seq });
         items = mergeItems(items, eventToItems(payload as ClaudeEvent));
     });
 
@@ -256,15 +331,16 @@ export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
     const rig: CliRig = {
         endpoint,
         server,
+        manager,
         client,
         storage,
-        wire,
+        chatSessionId,
         events,
         get items() {
             return items;
         },
         sendInput(text: string) {
-            client.sendInput(text);
+            client.sendInput(chatSessionId, text);
         },
         async dispose() {
             try {
@@ -272,7 +348,7 @@ export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
             } catch {
                 /* ignore */
             }
-            wire.dispose();
+            manager.dispose();
             server.close();
             try {
                 rmSync(tmpRoot, { recursive: true, force: true });

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { sessionClient } from '../session';
-import type { ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
+import type { ChatSessionMeta, ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
 import { eventToItems, mergeItems, uid } from '../session/events';
 import { MarkdownMessage } from './MarkdownMessage';
+import { SessionSidebar } from './SessionSidebar';
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -74,7 +75,11 @@ const TypingDots = memo(function TypingDots() {
 
 export function ChatScreen() {
     const navigate = useNavigate();
+    const params = useParams<{ sessionId: string }>();
+    const sessionId = params.sessionId ?? '';
+
     const [status, setStatus] = useState<SocketStatus>(sessionClient.getStatus());
+    const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
     const [items, setItems] = useState<Item[]>([]);
     const [input, setInput] = useState('');
     const [thinking, setThinking] = useState(false);
@@ -87,14 +92,20 @@ export function ChatScreen() {
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const logsBottomRef = useRef<HTMLDivElement>(null);
-    // StrictMode double-mounts the effect in dev; guard so we only replay once —
-    // otherwise the server sends the full history twice and every past message
-    // gets appended a second time at the bottom of the chat.
-    const replayedRef = useRef(false);
+
+    // Reset per-session UI state when the route param changes: different
+    // chat → different event stream → different messages.
+    useEffect(() => {
+        setItems([]);
+        setThinking(false);
+        setPermission(null);
+    }, [sessionId]);
 
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
-        const unsubMsg = sessionClient.onMessage((payload) => {
+        const unsubSessions = sessionClient.onSessionsChange(setSessions);
+        const unsubMsg = sessionClient.onMessage((sid, payload) => {
+            if (sid !== sessionId) return;
             if ((payload as PermissionEvent).type === 'permission-request') {
                 setPermission(payload as PermissionEvent);
                 return;
@@ -106,27 +117,24 @@ export function ChatScreen() {
             setItems(prev => mergeItems(prev, newItems));
         });
 
-        if (!replayedRef.current && sessionClient.getStatus() === 'connected') {
-            replayedRef.current = true;
-            sessionClient.rpc(uid(), 'replay', { fromSeq: -1 }).catch(() => {});
-        }
-
-        return () => { unsubStatus(); unsubMsg(); };
-    }, []);
+        return () => { unsubStatus(); unsubSessions(); unsubMsg(); };
+    }, [sessionId]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [items, thinking]);
 
+    const activeSession = sessions.find((s) => s.id === sessionId);
+
     const handleSend = useCallback(() => {
         const text = input.trim();
-        if (!text || status !== 'connected') return;
-        sessionClient.sendInput(text);
+        if (!text || status !== 'connected' || !sessionId) return;
+        sessionClient.sendInput(sessionId, text);
         setInput('');
         setThinking(true);
         setItems(prev => [...prev, { kind: 'user', text, id: uid() }]);
         setTimeout(() => inputRef.current?.focus(), 0);
-    }, [input, status]);
+    }, [input, status, sessionId]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -137,9 +145,15 @@ export function ChatScreen() {
 
     const handlePermission = useCallback((approved: boolean) => {
         if (!permission) return;
-        sessionClient.rpc(uid(), 'permissionResponse', { permissionId: permission.permissionId, approved }).catch(() => {});
+        sessionClient
+            .rpc(uid(), 'session.permissionResponse', {
+                sessionId,
+                permissionId: permission.permissionId,
+                approved,
+            })
+            .catch(() => {});
         setPermission(null);
-    }, [permission]);
+    }, [permission, sessionId]);
 
     const handleBackToHome = useCallback(() => {
         navigate('/');
@@ -172,88 +186,98 @@ export function ChatScreen() {
 
     return (
         <div className="chat-screen">
-            {permission && (
-                <div className="modal-overlay" onClick={() => handlePermission(false)}>
-                    <div className="modal-card" onClick={e => e.stopPropagation()}>
-                        <h3 className="modal-title">Permission Request</h3>
-                        <p className="modal-tool">{permission.toolName}</p>
-                        <pre className="modal-input">{JSON.stringify(permission.input, null, 2)}</pre>
-                        <div className="modal-actions">
-                            <button className="modal-btn deny" onClick={() => handlePermission(false)}>Deny</button>
-                            <button className="modal-btn approve" onClick={() => handlePermission(true)}>Approve</button>
+            <SessionSidebar activeSessionId={sessionId} />
+
+            <div className="chat-main">
+                {permission && (
+                    <div className="modal-overlay" onClick={() => handlePermission(false)}>
+                        <div className="modal-card" onClick={e => e.stopPropagation()}>
+                            <h3 className="modal-title">Permission Request</h3>
+                            <p className="modal-tool">{permission.toolName}</p>
+                            <pre className="modal-input">{JSON.stringify(permission.input, null, 2)}</pre>
+                            <div className="modal-actions">
+                                <button className="modal-btn deny" onClick={() => handlePermission(false)}>Deny</button>
+                                <button className="modal-btn approve" onClick={() => handlePermission(true)}>Approve</button>
+                            </div>
                         </div>
-                    </div>
-                </div>
-            )}
-
-            {logsOpen && (
-                <div className="logs-modal">
-                    <div className="logs-header">
-                        <div>
-                            <div className="logs-title">CLI Logs</div>
-                            {logPath && <div className="logs-path">{logPath}</div>}
-                        </div>
-                        <button className="logs-close" onClick={() => setLogsOpen(false)}>✕</button>
-                    </div>
-                    <div className="logs-body">
-                        {logsLoading
-                            ? <div className="logs-loading">Loading…</div>
-                            : logLines.length === 0
-                                ? <div className="logs-empty">No log entries.</div>
-                                : logLines.map((line, i) => <div key={i} className="logs-line">{line}</div>)
-                        }
-                        <div ref={logsBottomRef} />
-                    </div>
-                </div>
-            )}
-
-            <div className="chat-header">
-                <div className="chat-status">
-                    <span className={`status-dot ${statusDot}`} />
-                    <span className="status-label">{statusLabel}</span>
-                    {status === 'error' && sessionClient.getLastError() && (
-                        <span className="status-error-hint">{sessionClient.getLastError()}</span>
-                    )}
-                </div>
-                <div className="chat-header-actions">
-                    {status === 'connected' && (
-                        <button className="icon-btn" onClick={handleOpenLogs} title="查看日志">📋</button>
-                    )}
-                    <button className="icon-btn" onClick={handleBackToHome} title="返回首页">⌂</button>
-                    <button className="icon-btn disconnect-btn" onClick={handleDisconnect} title="断开并清除">✕</button>
-                </div>
-            </div>
-
-            <div className="chat-messages">
-                {items.length === 0 && !thinking && (
-                    <div className="chat-empty">
-                        {status === 'connected' ? 'How can I help you today?' : 'Waiting for connection…'}
                     </div>
                 )}
-                {items.map(item => <MessageItem key={item.id} item={item} />)}
-                {thinking && <TypingDots />}
-                <div ref={bottomRef} />
-            </div>
 
-            <div className="chat-input-bar">
-                <div className="chat-input-wrap">
-                    <textarea
-                        ref={inputRef}
-                        className="chat-textarea"
-                        value={input}
-                        onChange={e => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Message… (Enter to send, Shift+Enter for newline)"
-                        rows={1}
-                        disabled={status !== 'connected' || thinking}
-                    />
-                    <button
-                        className="chat-send-btn"
-                        onClick={handleSend}
-                        disabled={!input.trim() || status !== 'connected' || thinking}
-                    >
-                        ↑
-                    </button>
+                {logsOpen && (
+                    <div className="logs-modal">
+                        <div className="logs-header">
+                            <div>
+                                <div className="logs-title">CLI Logs</div>
+                                {logPath && <div className="logs-path">{logPath}</div>}
+                            </div>
+                            <button className="logs-close" onClick={() => setLogsOpen(false)}>✕</button>
+                        </div>
+                        <div className="logs-body">
+                            {logsLoading
+                                ? <div className="logs-loading">Loading…</div>
+                                : logLines.length === 0
+                                    ? <div className="logs-empty">No log entries.</div>
+                                    : logLines.map((line, i) => <div key={i} className="logs-line">{line}</div>)
+                            }
+                            <div ref={logsBottomRef} />
+                        </div>
+                    </div>
+                )}
+
+                <div className="chat-header">
+                    <div className="chat-status">
+                        <span className={`status-dot ${statusDot}`} />
+                        <span className="status-label">{statusLabel}</span>
+                        {activeSession && (
+                            <span className="chat-session-label">
+                                · {activeSession.tool}
+                                {activeSession.model ? ` (${activeSession.model})` : ''}
+                            </span>
+                        )}
+                        {status === 'error' && sessionClient.getLastError() && (
+                            <span className="status-error-hint">{sessionClient.getLastError()}</span>
+                        )}
+                    </div>
+                    <div className="chat-header-actions">
+                        {status === 'connected' && (
+                            <button className="icon-btn" onClick={handleOpenLogs} title="查看日志">📋</button>
+                        )}
+                        <button className="icon-btn" onClick={handleBackToHome} title="返回首页">⌂</button>
+                        <button className="icon-btn disconnect-btn" onClick={handleDisconnect} title="断开并清除">✕</button>
+                    </div>
+                </div>
+
+                <div className="chat-messages">
+                    {items.length === 0 && !thinking && (
+                        <div className="chat-empty">
+                            {status === 'connected' ? 'How can I help you today?' : 'Waiting for connection…'}
+                        </div>
+                    )}
+                    {items.map(item => <MessageItem key={item.id} item={item} />)}
+                    {thinking && <TypingDots />}
+                    <div ref={bottomRef} />
+                </div>
+
+                <div className="chat-input-bar">
+                    <div className="chat-input-wrap">
+                        <textarea
+                            ref={inputRef}
+                            className="chat-textarea"
+                            value={input}
+                            onChange={e => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            placeholder="Message… (Enter to send, Shift+Enter for newline)"
+                            rows={1}
+                            disabled={status !== 'connected' || thinking || !sessionId}
+                        />
+                        <button
+                            className="chat-send-btn"
+                            onClick={handleSend}
+                            disabled={!input.trim() || status !== 'connected' || thinking || !sessionId}
+                        >
+                            ↑
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

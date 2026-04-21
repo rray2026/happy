@@ -15,7 +15,9 @@ export const HelloReconnectSchema = z
         type: z.literal('hello'),
         sessionCredential: z.string().min(1),
         webappPublicKey: z.string().min(1),
-        lastSeq: z.number().int(),
+        /** Per-session last observed seq, keyed by chat sessionId. Missing entries
+         *  are treated as -1 (full replay). Empty object is valid (first load). */
+        lastSeqs: z.record(z.string().min(1), z.number().int()),
     })
     .strict();
 
@@ -26,6 +28,7 @@ export const HandshakeInboundSchema = z.union([HelloFirstTimeSchema, HelloReconn
 export const InputSchema = z
     .object({
         type: z.literal('input'),
+        sessionId: z.string().min(1),
         text: z.string(),
     })
     .strict();

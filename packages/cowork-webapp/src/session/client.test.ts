@@ -56,7 +56,6 @@ class FakeWebSocket {
     }
 }
 
-// Expose global constant required by `send()` implementation
 (globalThis as unknown as { WebSocket: { OPEN: number } }).WebSocket = { OPEN: FakeWebSocket.OPEN };
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -65,7 +64,7 @@ const qrPayload: DirectQRPayload = {
     type: 'direct',
     endpoint: 'ws://localhost:9999',
     cliSignPublicKey: 'cli-pub',
-    sessionId: 'sess-1',
+    sessionId: 'conn-1',
     nonce: 'nonce-xyz',
     nonceExpiry: Number.MAX_SAFE_INTEGER,
 };
@@ -73,9 +72,9 @@ const qrPayload: DirectQRPayload = {
 const storedCreds: StoredCredentials = {
     endpoint: 'ws://localhost:9999',
     cliPublicKey: 'cli-pub',
-    sessionId: 'sess-1',
+    sessionId: 'conn-1',
     sessionCredential: 'sess-cred-123',
-    lastSeq: 42,
+    lastSeqs: { 'chat-a': 42, 'chat-b': 5 },
     webappPublicKey: 'wa-pub',
 };
 
@@ -105,7 +104,8 @@ describe('SessionClient: initial state', () => {
         const { client } = makeClient();
         expect(client.getStatus()).toBe<SocketStatus>('disconnected');
         expect(client.getLastError()).toBeNull();
-        expect(client.getLastSeq()).toBe(-1);
+        expect(client.getLastSeq('any')).toBe(-1);
+        expect(client.getSessions()).toEqual([]);
     });
 
     it('onStatusChange fires immediately with current status', () => {
@@ -143,32 +143,41 @@ describe('SessionClient: first-time connect (QR)', () => {
         sockets[0].triggerMessage({
             type: 'welcome',
             sessionCredential: 'new-cred',
-            currentSeq: 7,
+            sessions: [],
         });
         expect(client.getStatus()).toBe('connected');
-        expect(client.getLastSeq()).toBe(7);
         expect(storage.loadCredentials()).toEqual({
             endpoint: 'ws://localhost:9999',
             cliPublicKey: 'cli-pub',
-            sessionId: 'sess-1',
+            sessionId: 'conn-1',
             sessionCredential: 'new-cred',
-            lastSeq: 7,
+            lastSeqs: {},
             webappPublicKey: 'wa-pub',
         });
     });
 
-    it('defaults lastSeq to -1 when welcome omits currentSeq', () => {
-        const { client, sockets, storage } = makeClient();
+    it('welcome exposes the session list via onSessionsChange', () => {
+        const { client, sockets } = makeClient();
         client.connectFirstTime(qrPayload, 'wa-pub');
+
+        const seen: Array<{ id: string }[]> = [];
+        client.onSessionsChange((list) => seen.push(list.map((s) => ({ id: s.id }))));
+
         sockets[0].triggerOpen();
-        sockets[0].triggerMessage({ type: 'welcome', sessionCredential: 'c' });
-        expect(client.getLastSeq()).toBe(-1);
-        expect(storage.loadCredentials()?.lastSeq).toBe(-1);
+        sockets[0].triggerMessage({
+            type: 'welcome',
+            sessionCredential: 'c',
+            sessions: [
+                { id: 'A', tool: 'claude', model: null, cwd: '/tmp', createdAt: 1, currentSeq: 0 },
+            ],
+        });
+        expect(client.getSessions().map((s) => s.id)).toEqual(['A']);
+        expect(seen.at(-1)).toEqual([{ id: 'A' }]);
     });
 });
 
 describe('SessionClient: resume from stored', () => {
-    it('sends hello with sessionCredential + stored lastSeq', () => {
+    it('sends hello with sessionCredential + stored lastSeqs map', () => {
         const { client, sockets } = makeClient();
         client.connectFromStored(storedCreds);
         sockets[0].triggerOpen();
@@ -176,7 +185,7 @@ describe('SessionClient: resume from stored', () => {
             type: 'hello',
             sessionCredential: 'sess-cred-123',
             webappPublicKey: 'wa-pub',
-            lastSeq: 42,
+            lastSeqs: { 'chat-a': 42, 'chat-b': 5 },
         });
     });
 
@@ -185,7 +194,7 @@ describe('SessionClient: resume from stored', () => {
         const saveSpy = vi.spyOn(storage, 'saveCredentials');
         client.connectFromStored(storedCreds);
         sockets[0].triggerOpen();
-        sockets[0].triggerMessage({ type: 'welcome' });
+        sockets[0].triggerMessage({ type: 'welcome', sessions: [] });
         expect(saveSpy).not.toHaveBeenCalled();
         expect(client.getStatus()).toBe('connected');
     });
@@ -199,32 +208,52 @@ describe('SessionClient: message handling', () => {
         setup.sockets[0].triggerMessage({
             type: 'welcome',
             sessionCredential: 'cred',
-            currentSeq: 0,
+            sessions: [],
         });
         return setup;
     }
 
-    it('dispatches payload to all message handlers', () => {
+    it('dispatches per-chat payload to all message handlers', () => {
         const { client, sockets } = connectedClient();
         const handler = vi.fn();
         client.onMessage(handler);
-        sockets[0].triggerMessage({ type: 'message', seq: 1, payload: { type: 'system', session_id: 'x' } });
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 1,
+            payload: { type: 'system', session_id: 'x' },
+        });
         expect(handler).toHaveBeenCalledOnce();
-        expect(handler).toHaveBeenCalledWith({ type: 'system', session_id: 'x' }, 1);
+        expect(handler).toHaveBeenCalledWith('chat-a', { type: 'system', session_id: 'x' }, 1);
     });
 
-    it('updates lastSeq monotonically and persists it', () => {
+    it('tracks lastSeq per chat session independently', () => {
         const { client, sockets, storage } = connectedClient();
-        sockets[0].triggerMessage({ type: 'message', seq: 5, payload: {} });
-        expect(client.getLastSeq()).toBe(5);
-        expect(storage.loadCredentials()?.lastSeq).toBe(5);
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'chat-a', seq: 5, payload: {} });
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'chat-b', seq: 2, payload: {} });
+        expect(client.getLastSeq('chat-a')).toBe(5);
+        expect(client.getLastSeq('chat-b')).toBe(2);
+        expect(client.getLastSeq('chat-c')).toBe(-1);
+        expect(storage.loadCredentials()?.lastSeqs).toEqual({ 'chat-a': 5, 'chat-b': 2 });
     });
 
     it('does not regress lastSeq on out-of-order older messages', () => {
         const { client, sockets } = connectedClient();
-        sockets[0].triggerMessage({ type: 'message', seq: 10, payload: {} });
-        sockets[0].triggerMessage({ type: 'message', seq: 3, payload: {} });
-        expect(client.getLastSeq()).toBe(10);
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'A', seq: 10, payload: {} });
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'A', seq: 3, payload: {} });
+        expect(client.getLastSeq('A')).toBe(10);
+    });
+
+    it('applies sessions-changed notification to live list', () => {
+        const { client, sockets } = connectedClient();
+        sockets[0].triggerMessage({
+            type: 'sessions',
+            sessions: [
+                { id: 'A', tool: 'claude', model: null, cwd: '/', createdAt: 0, currentSeq: 0 },
+                { id: 'B', tool: 'gemini', model: 'm', cwd: '/', createdAt: 1, currentSeq: 0 },
+            ],
+        });
+        expect(client.getSessions().map((s) => s.id)).toEqual(['A', 'B']);
     });
 
     it('replies to ping with pong', () => {
@@ -246,9 +275,9 @@ describe('SessionClient: message handling', () => {
         const { client, sockets } = connectedClient();
         const handler = vi.fn();
         const unsub = client.onMessage(handler);
-        sockets[0].triggerMessage({ type: 'message', seq: 1, payload: {} });
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'x', seq: 1, payload: {} });
         unsub();
-        sockets[0].triggerMessage({ type: 'message', seq: 2, payload: {} });
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'x', seq: 2, payload: {} });
         expect(handler).toHaveBeenCalledOnce();
     });
 });
@@ -258,7 +287,11 @@ describe('SessionClient: RPC', () => {
         const setup = makeClient();
         setup.client.connectFirstTime(qrPayload, 'wa-pub');
         setup.sockets[0].triggerOpen();
-        setup.sockets[0].triggerMessage({ type: 'welcome', sessionCredential: 'c' });
+        setup.sockets[0].triggerMessage({
+            type: 'welcome',
+            sessionCredential: 'c',
+            sessions: [],
+        });
         return setup;
     }
 
@@ -288,7 +321,11 @@ describe('SessionClient: RPC', () => {
             const { client } = makeClient({ rpcTimeoutMs: 50 });
             client.connectFirstTime(qrPayload, 'wa-pub');
             FakeWebSocket.instances[0].triggerOpen();
-            FakeWebSocket.instances[0].triggerMessage({ type: 'welcome', sessionCredential: 'c' });
+            FakeWebSocket.instances[0].triggerMessage({
+                type: 'welcome',
+                sessionCredential: 'c',
+                sessions: [],
+            });
             const promise = client.rpc('req-3', 'slow');
             vi.advanceTimersByTime(51);
             await expect(promise).rejects.toThrow(/RPC timeout: slow/);
@@ -299,7 +336,6 @@ describe('SessionClient: RPC', () => {
 
     it('ignores rpc-response with unknown id', async () => {
         const { sockets } = connectedClient();
-        // Should not throw even though no pending entry exists
         expect(() =>
             sockets[0].triggerMessage({ type: 'rpc-response', id: 'nobody', result: 1 })
         ).not.toThrow();
@@ -337,7 +373,7 @@ describe('SessionClient: disconnect', () => {
         const { client, sockets } = makeClient();
         client.connectFirstTime(qrPayload, 'wa-pub');
         sockets[0].triggerOpen();
-        sockets[0].triggerMessage({ type: 'welcome', sessionCredential: 'c' });
+        sockets[0].triggerMessage({ type: 'welcome', sessionCredential: 'c', sessions: [] });
         client.disconnect();
         expect(client.getStatus()).toBe('disconnected');
     });
@@ -368,14 +404,12 @@ describe('SessionClient: reconnect behavior', () => {
         sockets[0].triggerClose();
         expect(client.getStatus()).toBe('disconnected');
 
-        // First retry fires after initial delay (1000ms)
         vi.advanceTimersByTime(1_000);
         expect(FakeWebSocket.instances).toHaveLength(2);
 
-        // Close again — next retry should be 2× the previous delay
         FakeWebSocket.instances[1].triggerClose();
         vi.advanceTimersByTime(1_999);
-        expect(FakeWebSocket.instances).toHaveLength(2); // not yet
+        expect(FakeWebSocket.instances).toHaveLength(2);
         vi.advanceTimersByTime(1);
         expect(FakeWebSocket.instances).toHaveLength(3);
     });

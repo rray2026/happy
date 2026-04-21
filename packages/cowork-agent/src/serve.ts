@@ -1,13 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import chalk from 'chalk';
-import { wireAgentToServer, type AgentType } from './assemble.js';
 import { buildQRPayload, loadOrGenerateCliKeys } from './auth.js';
-import { keysPath, statePath } from './config.js';
+import { keysPath } from './config.js';
 import { logger } from './logger.js';
 import { displayQRCode } from './qrcode.js';
+import { SessionManager, type Tool } from './sessionManager.js';
+import type { WsServerHandle } from './types.js';
 import { startWsServer } from './wsServer.js';
 
-export type { AgentType };
+export type AgentType = Tool;
 
 export interface ServeOptions {
     agent: AgentType;
@@ -46,70 +47,53 @@ export function parseServeArgs(args: string[]): ServeOptions {
     return { agent, port, host, endpoint, agentArgs, geminiApiKey, model };
 }
 
-interface ServeState {
-    geminiSessionId?: string;
-    cwd: string;
-}
-
-function loadServeState(): ServeState | null {
-    try {
-        if (!existsSync(statePath)) return null;
-        const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as ServeState;
-        return parsed.cwd === process.cwd() ? parsed : null;
-    } catch {
-        return null;
-    }
-}
-
-function saveServeState(state: ServeState): void {
-    try {
-        writeFileSync(statePath, JSON.stringify(state), 'utf8');
-    } catch (err) {
-        logger.debug('[serve] failed to save state:', (err as Error).message);
-    }
-}
-
 export async function handleServe(opts: ServeOptions): Promise<void> {
     const isReturningSession = existsSync(keysPath);
     const cliKeys = loadOrGenerateCliKeys(keysPath);
     const { sessionId } = cliKeys;
     const qrPayload = buildQRPayload(opts.endpoint, cliKeys, sessionId);
 
-    const serveState = loadServeState();
-    if (serveState?.geminiSessionId) {
-        logger.debug('[serve] found previous gemini session:', serveState.geminiSessionId);
-    }
+    // wsServer and SessionManager reference each other: the manager pushes
+    // broadcasts through the server, while the server pulls the session list
+    // and replay deltas from the manager at handshake time. Callbacks defer the
+    // reference to the other side, which is always fully initialized by the
+    // time any of them fires (first message must cross the ws).
+    let server!: WsServerHandle;
 
-    // WebSocket server and the agent wire reference each other: wsServer needs
-    // onInput/onRpc at construction, but wire needs the server handle for
-    // broadcasting. Resolve by constructing the server with callbacks that
-    // defer to `wire`, then assigning `wire` immediately after. Callbacks only
-    // fire after a ws message arrives, so `wire` is always initialized by then.
-    let wire!: ReturnType<typeof wireAgentToServer>;
+    const manager = new SessionManager({
+        cwd: process.cwd(),
+        geminiApiKey: opts.geminiApiKey,
+        onBroadcast: (sid, seq, payload) => server.pushMessage(sid, seq, payload),
+        onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
+    });
 
-    const server = startWsServer({
+    server = startWsServer({
         port: opts.port,
         host: opts.host,
         sessionId,
         cliKeys,
         qrPayload,
-        onRpc: (id, method, params) => wire.handleRpc(id, method, params),
-        onInput: (text) => {
-            wire.handleInput(text).catch((err: Error) =>
+        listSessions: () => manager.list(),
+        replayFrom: (sid, fromSeq) => manager.replayFrom(sid, fromSeq),
+        onInput: (sid, text) => {
+            manager.handleInput(sid, text).catch((err: Error) =>
                 logger.debug('[serve] input error:', err?.message),
             );
         },
+        onRpc: (id, method, params) => handleRpc(id, method, params, manager, server),
     });
 
-    wire = wireAgentToServer({
-        agent: opts.agent,
-        server,
-        model: opts.model,
-        agentArgs: opts.agentArgs,
-        resumeSessionId: serveState?.geminiSessionId,
-        geminiApiKey: opts.geminiApiKey,
-        onGeminiSessionId: (id) => saveServeState({ geminiSessionId: id, cwd: process.cwd() }),
-    });
+    // Auto-create one initial session from CLI flags, so `cowork-agent --gemini`
+    // still "just works" without the webapp needing to create a session first.
+    try {
+        manager.create({
+            tool: opts.agent,
+            model: opts.model,
+            agentArgs: opts.agentArgs,
+        });
+    } catch (err) {
+        logger.debug('[serve] initial session create failed:', (err as Error).message);
+    }
 
     const qrJson = JSON.stringify(qrPayload);
     const modelLabel = opts.model ? `  |  Model: ${opts.model}` : '';
@@ -149,6 +133,112 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         process.on('SIGTERM', resolve);
     });
 
-    wire.dispose();
+    manager.dispose();
     server.close();
+}
+
+// ─── RPC routing ────────────────────────────────────────────────────────────
+
+type RpcParams = Record<string, unknown> | undefined;
+
+async function handleRpc(
+    id: string,
+    method: string,
+    rawParams: unknown,
+    manager: SessionManager,
+    server: WsServerHandle,
+): Promise<void> {
+    const params = (rawParams as RpcParams) ?? undefined;
+    const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+    try {
+        if (method === 'session.list') {
+            server.sendRpcResponse(id, { sessions: manager.list() });
+            return;
+        }
+
+        if (method === 'session.create') {
+            const tool = str(params?.tool);
+            if (tool !== 'claude' && tool !== 'gemini') {
+                server.sendRpcResponse(id, null, 'tool must be "claude" or "gemini"');
+                return;
+            }
+            const model = str(params?.model);
+            const agentArgs = Array.isArray(params?.agentArgs)
+                ? (params!.agentArgs as unknown[]).filter((x): x is string => typeof x === 'string')
+                : undefined;
+            const session = manager.create({ tool, model, agentArgs });
+            server.sendRpcResponse(id, { session });
+            return;
+        }
+
+        if (method === 'session.close') {
+            const sid = str(params?.sessionId);
+            if (!sid) {
+                server.sendRpcResponse(id, null, 'sessionId required');
+                return;
+            }
+            server.sendRpcResponse(id, { ok: manager.close(sid) });
+            return;
+        }
+
+        if (method === 'session.abort') {
+            const sid = str(params?.sessionId);
+            if (!sid) {
+                server.sendRpcResponse(id, null, 'sessionId required');
+                return;
+            }
+            manager.abort(sid);
+            server.sendRpcResponse(id, { ok: true });
+            return;
+        }
+
+        if (method === 'session.replay') {
+            const sid = str(params?.sessionId);
+            if (!sid) {
+                server.sendRpcResponse(id, null, 'sessionId required');
+                return;
+            }
+            const fromSeq =
+                typeof params?.fromSeq === 'number' ? (params.fromSeq as number) : -1;
+            const delta = manager.replayFrom(sid, fromSeq);
+            for (const entry of delta) server.pushMessage(sid, entry.seq, entry.payload);
+            server.sendRpcResponse(id, { ok: true, count: delta.length });
+            return;
+        }
+
+        if (method === 'session.permissionResponse') {
+            const sid = str(params?.sessionId);
+            const permissionId = str(params?.permissionId);
+            const approved = params?.approved === true;
+            if (!sid || !permissionId) {
+                server.sendRpcResponse(id, null, 'sessionId and permissionId required');
+                return;
+            }
+            manager.permissionResponse(sid, permissionId, approved);
+            server.sendRpcResponse(id, { ok: true });
+            return;
+        }
+
+        if (method === 'getLogs') {
+            const raw = params?.lines;
+            const count = typeof raw === 'number' ? raw : parseInt(String(raw ?? '200'), 10);
+            try {
+                const content = readFileSync(logger.getLogPath(), 'utf8');
+                const allLines = content.split('\n').filter(Boolean);
+                server.sendRpcResponse(id, {
+                    lines: allLines.slice(-(Number.isFinite(count) ? count : 200)),
+                    logPath: logger.getLogPath(),
+                });
+            } catch {
+                server.sendRpcResponse(id, { lines: [], logPath: logger.getLogPath() });
+            }
+            return;
+        }
+
+        server.sendRpcResponse(id, null, `unknown method: ${method}`);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        server.sendRpcResponse(id, null, msg);
+    }
 }

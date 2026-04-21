@@ -1,7 +1,9 @@
 import type {
+    ChatSessionMeta,
     DirectQRPayload,
     MessageHandler,
     RpcResponse,
+    SessionsHandler,
     SocketStatus,
     StatusHandler,
     StoredCredentials,
@@ -27,19 +29,20 @@ const DEFAULTS = {
 };
 
 /**
- * Client that manages the WebSocket session with the CLI server.
+ * Client that manages the WebSocket link to the cowork-agent.
  *
- * Responsibilities:
- * - Handshake (first-time via QR payload, resume via stored credential)
- * - Auto-reconnect with exponential backoff
- * - Sequence tracking for replay on reconnect
- * - RPC request/response with timeout
- * - Credential persistence
+ * One SessionClient owns **one connection** but may carry events for many chat
+ * sessions: each inbound event declares its own chat `sessionId`. The client:
+ * - Handshakes (first-time via QR payload, resume via stored credential).
+ * - Tracks `lastSeq` per chat sessionId and replays them on reconnect.
+ * - Exposes the live chat-session list via `onSessionsChange`.
+ * - Routes RPCs with per-request timeout and request-id.
  */
 export class SessionClient {
     private ws: WebSocket | null = null;
     private messageHandlers = new Set<MessageHandler>();
     private statusHandlers = new Set<StatusHandler>();
+    private sessionsHandlers = new Set<SessionsHandler>();
     private rpcPending = new Map<string, (res: RpcResponse) => void>();
     private currentStatus: SocketStatus = 'disconnected';
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -51,7 +54,8 @@ export class SessionClient {
     private qrPayload: DirectQRPayload | null = null;
     private webappPublicKey = '';
     private storedCredentials: StoredCredentials | null = null;
-    private lastSeq = -1;
+    private lastSeqs: Record<string, number> = {};
+    private sessions: ChatSessionMeta[] = [];
 
     private readonly storage: CredentialStorage;
     private readonly createWebSocket: WebSocketFactory;
@@ -80,7 +84,8 @@ export class SessionClient {
         this.storedCredentials = null;
         this.endpoint = qrPayload.endpoint;
         this.webappPublicKey = webappPublicKey;
-        this.lastSeq = -1;
+        this.lastSeqs = {};
+        this.sessions = [];
         this.resetDelay();
         this.open();
     }
@@ -92,7 +97,8 @@ export class SessionClient {
         this.qrPayload = null;
         this.endpoint = creds.endpoint;
         this.webappPublicKey = creds.webappPublicKey;
-        this.lastSeq = creds.lastSeq;
+        this.lastSeqs = { ...creds.lastSeqs };
+        this.sessions = [];
         this.resetDelay();
         this.open();
     }
@@ -105,8 +111,8 @@ export class SessionClient {
         this.setStatus('disconnected');
     }
 
-    sendInput(text: string): void {
-        this.send({ type: 'input', text });
+    sendInput(sessionId: string, text: string): void {
+        this.send({ type: 'input', sessionId, text });
     }
 
     rpc(id: string, method: string, params?: unknown): Promise<RpcResponse> {
@@ -134,9 +140,20 @@ export class SessionClient {
         return () => { this.statusHandlers.delete(handler); };
     }
 
+    onSessionsChange(handler: SessionsHandler): () => void {
+        this.sessionsHandlers.add(handler);
+        handler(this.sessions);
+        return () => { this.sessionsHandlers.delete(handler); };
+    }
+
     getStatus(): SocketStatus { return this.currentStatus; }
     getLastError(): string | null { return this.lastErrorReason; }
-    getLastSeq(): number { return this.lastSeq; }
+    getLastSeq(sessionId: string): number {
+        return Object.prototype.hasOwnProperty.call(this.lastSeqs, sessionId)
+            ? this.lastSeqs[sessionId]
+            : -1;
+    }
+    getSessions(): ChatSessionMeta[] { return this.sessions; }
 
     // ── Credential helpers (proxied to injected storage) ──────────────────────
 
@@ -183,7 +200,7 @@ export class SessionClient {
                         type: 'hello',
                         sessionCredential: this.storedCredentials.sessionCredential,
                         webappPublicKey: this.webappPublicKey,
-                        lastSeq: this.lastSeq,
+                        lastSeqs: this.lastSeqs,
                     });
                 }
             };
@@ -225,33 +242,48 @@ export class SessionClient {
 
         switch (m['type']) {
             case 'welcome': {
+                const incomingSessions = Array.isArray(m['sessions'])
+                    ? (m['sessions'] as ChatSessionMeta[])
+                    : [];
+                this.sessions = incomingSessions;
                 if (this.qrPayload && typeof m['sessionCredential'] === 'string') {
                     const creds: StoredCredentials = {
                         endpoint: this.endpoint,
                         cliPublicKey: this.qrPayload.cliSignPublicKey,
                         sessionId: this.qrPayload.sessionId,
                         sessionCredential: m['sessionCredential'],
-                        lastSeq: typeof m['currentSeq'] === 'number' ? m['currentSeq'] : -1,
+                        lastSeqs: { ...this.lastSeqs },
                         webappPublicKey: this.webappPublicKey,
                     };
                     this.storedCredentials = creds;
-                    this.lastSeq = creds.lastSeq;
                     this.qrPayload = null;
                     this.storage.saveCredentials(creds);
                 }
+                this.emitSessions();
                 this.setStatus('connected');
                 break;
             }
+            case 'sessions': {
+                this.sessions = Array.isArray(m['sessions'])
+                    ? (m['sessions'] as ChatSessionMeta[])
+                    : [];
+                this.emitSessions();
+                break;
+            }
             case 'message': {
+                const sid = typeof m['sessionId'] === 'string' ? m['sessionId'] : '';
                 const seq = typeof m['seq'] === 'number' ? m['seq'] : -1;
-                if (seq > this.lastSeq) {
-                    this.lastSeq = seq;
+                if (sid && seq > (this.lastSeqs[sid] ?? -1)) {
+                    this.lastSeqs[sid] = seq;
                     if (this.storedCredentials) {
-                        this.storedCredentials = { ...this.storedCredentials, lastSeq: seq };
+                        this.storedCredentials = {
+                            ...this.storedCredentials,
+                            lastSeqs: { ...this.lastSeqs },
+                        };
                         this.storage.saveCredentials(this.storedCredentials);
                     }
                 }
-                this.messageHandlers.forEach(h => h(m['payload'], seq));
+                this.messageHandlers.forEach((h) => h(sid, m['payload'], seq));
                 break;
             }
             case 'ping':
@@ -306,6 +338,10 @@ export class SessionClient {
             this.currentStatus = status;
             this.statusHandlers.forEach(h => h(status));
         }
+    }
+
+    private emitSessions(): void {
+        this.sessionsHandlers.forEach((h) => h(this.sessions));
     }
 }
 

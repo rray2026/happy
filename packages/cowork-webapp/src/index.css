@@ -201,6 +201,17 @@ button:focus:not(:focus-visible) { outline: none; }
      collapses or expands; falls back to 100vh on older browsers. */
   height: 100dvh;
   display: flex;
+  flex-direction: row;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* The right-hand pane containing the header + messages + input. Sits beside
+   the left SessionSidebar. */
+.chat-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   background: var(--bg);
   overflow: hidden;
@@ -1015,4 +1026,248 @@ button:focus:not(:focus-visible) { outline: none; }
 .error-boundary-actions .connect-btn,
 .error-boundary-actions .forget-btn {
   flex: 1;
+}
+
+/* ── Session sidebar ─────────────────────────────────────────────────────── */
+
+.session-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding:
+    calc(12px + var(--safe-top))
+    0
+    calc(12px + var(--safe-bottom))
+    calc(8px + var(--safe-left));
+  overflow: hidden;
+}
+
+.session-sidebar.collapsed {
+  width: 40px;
+  padding:
+    calc(12px + var(--safe-top))
+    0
+    calc(12px + var(--safe-bottom))
+    calc(4px + var(--safe-left));
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .session-sidebar {
+    width: 200px;
+  }
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 10px 4px;
+}
+
+.sidebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.sidebar-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.sidebar-toggle:hover { background: color-mix(in srgb, var(--border) 40%, transparent); }
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-empty {
+  padding: 10px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s;
+  position: relative;
+}
+
+.sidebar-item:hover {
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.sidebar-item.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.sidebar-item-main {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 8px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-tool {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebar-tool.tool-claude { color: #c47f00; border-color: color-mix(in srgb, #c47f00 40%, var(--border)); }
+.sidebar-tool.tool-gemini { color: #2b7cff; border-color: color-mix(in srgb, #2b7cff 40%, var(--border)); }
+
+.sidebar-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-model {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 8px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.sidebar-item:hover .sidebar-close,
+.sidebar-item.active .sidebar-close { opacity: 1; }
+.sidebar-close:hover {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+  color: var(--error);
+}
+
+.sidebar-foot {
+  display: flex;
+  gap: 6px;
+  padding: 8px 8px 0 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+
+.sidebar-new {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.sidebar-new:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  border-color: var(--accent);
+}
+.sidebar-new:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Session-scoped label in the chat header ("· claude (sonnet-4)"). */
+.chat-session-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+/* ── Chat landing (empty pane when no session is selected) ────────────────── */
+
+.chat-empty-pane {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.chat-empty-box {
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.chat-empty-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.chat-empty-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.chat-empty-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
 }

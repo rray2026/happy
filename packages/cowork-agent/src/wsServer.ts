@@ -2,7 +2,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { issueCredential, verifyCredential, verifyNonce } from './auth.js';
 import { logger } from './logger.js';
 import { HandshakeInboundSchema, SessionInboundSchema } from './schemas.js';
-import { SessionStore } from './sessionStore.js';
+import type { SessionMeta } from './sessionManager.js';
 import type {
     CliKeys,
     CliMessage,
@@ -16,18 +16,23 @@ const PING_INTERVAL_MS = 30_000;
 
 type ConnState = 'handshake' | 'established';
 
+/** Per-session replay fetcher: returns the stream slice with seq > fromSeq. */
+export type ReplayFetcher = (
+    sessionId: string,
+    fromSeq: number,
+) => Array<{ seq: number; payload: unknown }>;
+
 /**
  * WebSocket server with a two-phase protocol.
  *
  *   Phase 1 (handshake): client must send exactly one `hello` message
- *     (first-time or reconnect). Agent replies `welcome` on success, or
- *     `error` and closes on failure.
+ *     (first-time or reconnect). Agent replies `welcome` (carrying the current
+ *     session list) on success, or `error` and closes on failure.
  *   Phase 2 (session): after handshake, only `input` / `rpc` / `pong` are
- *     accepted. Any malformed or out-of-phase message ends the connection.
+ *     accepted. All `input` messages are keyed by a chat `sessionId`.
  *
- * Binds to 127.0.0.1 by default; callers may opt into a different host
- * (e.g. 0.0.0.0) when remote exposure is intended. Only one webapp may be
- * connected at a time — a new connection evicts the previous one.
+ * Binds to 127.0.0.1 by default. Only one webapp may be connected at a time —
+ * a new connection evicts the previous one.
  */
 export function startWsServer(opts: {
     port: number;
@@ -37,10 +42,13 @@ export function startWsServer(opts: {
     qrPayload: DirectQRPayload;
     onRpc: RpcHandler;
     onInput: InputHandler;
+    /** Snapshot of every live chat session — embedded in `welcome`. */
+    listSessions: () => SessionMeta[];
+    /** Called once per session on reconnect to pump the delta to the client. */
+    replayFrom: ReplayFetcher;
 }): WsServerHandle {
-    const { port, sessionId, cliKeys, qrPayload, onRpc, onInput } = opts;
+    const { port, sessionId, cliKeys, qrPayload, onRpc, onInput, listSessions, replayFrom } = opts;
     const host = opts.host ?? '127.0.0.1';
-    const store = new SessionStore(200);
 
     let activeClient: WebSocket | null = null;
     let pingTimer: NodeJS.Timeout | null = null;
@@ -77,15 +85,28 @@ export function startWsServer(opts: {
         }, PING_INTERVAL_MS);
     }
 
-    function completeHandshake(ws: WebSocket, credential: string, lastSeq: number): void {
+    function completeHandshake(
+        ws: WebSocket,
+        credential: string,
+        lastSeqs: Record<string, number>,
+    ): void {
+        const sessions = listSessions();
         send(ws, {
             type: 'welcome',
             sessionId,
-            currentSeq: store.getCurrentSeq(),
             sessionCredential: credential,
+            sessions,
         });
-        for (const entry of store.getDelta(lastSeq)) {
-            send(ws, { type: 'message', seq: entry.seq, payload: entry.payload });
+        for (const s of sessions) {
+            const from = Object.prototype.hasOwnProperty.call(lastSeqs, s.id) ? lastSeqs[s.id] : -1;
+            for (const entry of replayFrom(s.id, from)) {
+                send(ws, {
+                    type: 'message',
+                    sessionId: s.id,
+                    seq: entry.seq,
+                    payload: entry.payload,
+                });
+            }
         }
         startPingTimer(ws);
     }
@@ -115,7 +136,7 @@ export function startWsServer(opts: {
                 cliKeys.signSecretKey,
             );
             logger.debug('[wsServer] first-time handshake ok; nonce consumed');
-            completeHandshake(ws, credential, -1);
+            completeHandshake(ws, credential, {});
             return 'established';
         }
 
@@ -125,8 +146,10 @@ export function startWsServer(opts: {
             fail(ws, 'invalid credential');
             return 'handshake';
         }
-        logger.debug(`[wsServer] reconnect ok, lastSeq=${msg.lastSeq}`);
-        completeHandshake(ws, msg.sessionCredential, msg.lastSeq);
+        logger.debug(
+            `[wsServer] reconnect ok, lastSeqs for ${Object.keys(msg.lastSeqs).length} session(s)`,
+        );
+        completeHandshake(ws, msg.sessionCredential, msg.lastSeqs);
         return 'established';
     }
 
@@ -143,19 +166,7 @@ export function startWsServer(opts: {
         if (msg.type === 'pong') return;
 
         if (msg.type === 'input') {
-            // Record the user's own message into the session stream so it has
-            // a seq (like an IM message id). We echo it back to the sender and
-            // it naturally replays on reconnect via delta. Shape matches the
-            // Claude user event so the webapp renders it without extra logic.
-            const userEvent = {
-                type: 'user',
-                message: { role: 'user', content: msg.text },
-            };
-            const seq = store.append(userEvent);
-            if (activeClient && activeClient.readyState === WebSocket.OPEN) {
-                send(activeClient, { type: 'message', seq, payload: userEvent });
-            }
-            onInput(msg.text);
+            onInput(msg.sessionId, msg.text);
             return;
         }
 
@@ -226,14 +237,16 @@ export function startWsServer(opts: {
         ready(): Promise<void> {
             return readyPromise;
         },
-        broadcast(payload: unknown): number {
-            const seq = store.append(payload);
+        pushMessage(sid: string, seq: number, payload: unknown): void {
             if (activeClient && activeClient.readyState === WebSocket.OPEN) {
-                send(activeClient, { type: 'message', seq, payload });
+                send(activeClient, { type: 'message', sessionId: sid, seq, payload });
             }
-            return seq;
         },
-
+        pushSessionsChanged(sessions: SessionMeta[]): void {
+            if (activeClient && activeClient.readyState === WebSocket.OPEN) {
+                send(activeClient, { type: 'sessions', sessions });
+            }
+        },
         sendRpcResponse(id: string, result: unknown | null, error?: string): void {
             if (activeClient && activeClient.readyState === WebSocket.OPEN) {
                 send(activeClient, {
@@ -244,15 +257,6 @@ export function startWsServer(opts: {
                 });
             }
         },
-
-        replayFrom(fromSeq: number): void {
-            if (activeClient && activeClient.readyState === WebSocket.OPEN) {
-                for (const entry of store.getDelta(fromSeq)) {
-                    send(activeClient, { type: 'message', seq: entry.seq, payload: entry.payload });
-                }
-            }
-        },
-
         close(): void {
             clearPingTimer();
             wss.close();

@@ -1,13 +1,27 @@
 // ── Socket types ──────────────────────────────────────────────────────────────
 
 export type SocketStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-export type MessageHandler = (payload: unknown, seq: number) => void;
+/** Delivered to consumers for every agent event. `sessionId` is the chat id the
+ *  event belongs to — not the connection id. */
+export type MessageHandler = (sessionId: string, payload: unknown, seq: number) => void;
 export type StatusHandler = (status: SocketStatus) => void;
+/** Fires on initial `welcome` and on any subsequent `sessions` change-notify. */
+export type SessionsHandler = (sessions: ChatSessionMeta[]) => void;
+
+export interface ChatSessionMeta {
+    id: string;
+    tool: 'claude' | 'gemini';
+    model: string | undefined;
+    cwd: string;
+    createdAt: number;
+    currentSeq: number;
+}
 
 export interface DirectQRPayload {
     type: 'direct';
     endpoint: string;
     cliSignPublicKey: string;
+    /** Connection identity — NOT a chat session id. */
     sessionId: string;
     nonce: string;
     nonceExpiry: number;
@@ -16,9 +30,11 @@ export interface DirectQRPayload {
 export interface StoredCredentials {
     endpoint: string;
     cliPublicKey: string;
+    /** Connection identity (same as DirectQRPayload.sessionId). */
     sessionId: string;
     sessionCredential: string;
-    lastSeq: number;
+    /** Last observed seq per chat session id. */
+    lastSeqs: Record<string, number>;
     webappPublicKey: string;
 }
 
