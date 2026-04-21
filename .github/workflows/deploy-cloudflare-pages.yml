@@ -56,8 +56,10 @@ jobs:
               with:
                   apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
                   accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  workingDirectory: packages/cowork-webapp
+                  packageManager: pnpm
                   command: >
-                      pages deploy packages/cowork-webapp/dist
+                      pages deploy dist
                       --project-name=${{ vars.CF_PAGES_PROJECT_NAME }}
                       --branch=${{ (github.event.inputs.environment || 'production') == 'production' && 'main' || (github.event.inputs.environment || 'production') }}
                       --commit-dirty=true
