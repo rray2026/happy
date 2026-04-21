@@ -44,6 +44,7 @@ function printUsage(): void {
             '',
             chalk.bold('Env:'),
             '  COWORK_AGENT_PORT       Port to listen on (default: 4000)',
+            '  COWORK_AGENT_BIND       Interface to bind (default: 127.0.0.1; use 0.0.0.0 for LAN)',
             '  COWORK_AGENT_ENDPOINT   Public ws:// URL advertised in QR (default: ws://localhost:PORT)',
             '  COWORK_AGENT_HOME       Keys/logs dir (default: ~/.cowork-agent)',
             '  GEMINI_API_KEY          Passed to gemini CLI (optional)',

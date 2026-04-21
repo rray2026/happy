@@ -13,6 +13,7 @@ export type AgentType = 'claude' | 'gemini';
 export interface ServeOptions {
     agent: AgentType;
     port: number;
+    host: string;
     endpoint: string;
     agentArgs: string[];
     geminiApiKey: string | undefined;
@@ -38,10 +39,12 @@ export function parseServeArgs(args: string[]): ServeOptions {
     }
 
     const port = parseInt(process.env.COWORK_AGENT_PORT ?? '4000', 10);
-    const endpoint = process.env.COWORK_AGENT_ENDPOINT ?? `ws://localhost:${port}`;
+    const host = process.env.COWORK_AGENT_BIND ?? '127.0.0.1';
+    const defaultEndpointHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
+    const endpoint = process.env.COWORK_AGENT_ENDPOINT ?? `ws://${defaultEndpointHost}:${port}`;
     const geminiApiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
 
-    return { agent, port, endpoint, agentArgs, geminiApiKey, model };
+    return { agent, port, host, endpoint, agentArgs, geminiApiKey, model };
 }
 
 interface ServeState {
@@ -146,6 +149,7 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
 
     const server = startWsServer({
         port: opts.port,
+        host: opts.host,
         sessionId,
         cliKeys,
         qrPayload,
@@ -199,9 +203,17 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
 
     const qrJson = JSON.stringify(qrPayload);
     const modelLabel = opts.model ? `  |  Model: ${opts.model}` : '';
+    const isRemoteBind = opts.host === '0.0.0.0' || opts.host === '::';
     console.log(chalk.bold('\n🚀 cowork-agent — direct connect'));
-    console.log(chalk.dim(`Agent: ${opts.agent}${modelLabel}  |  Port: ${opts.port}`));
+    console.log(chalk.dim(`Agent: ${opts.agent}${modelLabel}  |  Bind: ${opts.host}:${opts.port}`));
     console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
+    if (isRemoteBind) {
+        console.log(
+            chalk.yellow(
+                '⚠  Listening on all interfaces — anyone who scans the QR within 5 min can pair. Prefer 127.0.0.1 unless you need LAN access.',
+            ),
+        );
+    }
     if (isReturningSession) {
         console.log(chalk.green('Previous session found — webapp will reconnect automatically.'));
         console.log(chalk.dim('\nTo connect a new device, scan:'));

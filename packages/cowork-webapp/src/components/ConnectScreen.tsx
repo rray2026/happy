@@ -62,7 +62,7 @@ export function ConnectScreen() {
             return;
         }
         if (Date.now() > payload.nonceExpiry) {
-            setConnectError('QR code 已过期，请重新运行 `happy serve`。');
+            setConnectError('QR code 已过期，请重新运行 `cowork-agent serve`。');
             return;
         }
 
@@ -129,7 +129,7 @@ export function ConnectScreen() {
 
                 {!stored && (
                     <p className="connect-subtitle">
-                        在终端运行 <code>happy serve</code>，然后将打印的 JSON payload 粘贴到下方。
+                        在终端运行 <code>cowork-agent serve</code>，然后将打印的 JSON payload 粘贴到下方。
                     </p>
                 )}
 

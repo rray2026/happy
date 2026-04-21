@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import tweetnacl from 'tweetnacl';
 import { decodeBase64, encodeBase64, getRandomBytes } from './encoding.js';
+import { logger } from './logger.js';
 import type { CliKeys, DirectQRPayload, SessionCredentialPayload } from './types.js';
 
 const NONCE_TTL_MS = 5 * 60 * 1000;
@@ -19,6 +20,20 @@ export function generateCliKeys(): CliKeys & { sessionId: string } {
 export function loadOrGenerateCliKeys(keyPath: string): CliKeys & { sessionId: string } {
     try {
         if (existsSync(keyPath)) {
+            // Warn & tighten permissions if the key file is group/world-readable.
+            if (process.platform !== 'win32') {
+                try {
+                    const mode = statSync(keyPath).mode & 0o777;
+                    if (mode & 0o077) {
+                        logger.debug(
+                            `[auth] key file ${keyPath} has loose permissions ${mode.toString(8)}; tightening to 600`,
+                        );
+                        chmodSync(keyPath, 0o600);
+                    }
+                } catch (err) {
+                    logger.debug('[auth] failed to check/fix key file permissions:', (err as Error).message);
+                }
+            }
             const stored = JSON.parse(readFileSync(keyPath, 'utf8')) as {
                 signPublicKey: string;
                 signSecretKey: string;
@@ -42,7 +57,7 @@ export function loadOrGenerateCliKeys(keyPath: string): CliKeys & { sessionId: s
             signSecretKey: encodeBase64(kp.secretKey),
             sessionId,
         }),
-        'utf8',
+        { encoding: 'utf8', mode: 0o600 },
     );
     return { signPublicKey: kp.publicKey, signSecretKey: kp.secretKey, sessionId };
 }
@@ -67,8 +82,11 @@ export function verifyNonce(
     receivedNonce: string,
     qrNonce: string,
     nonceExpiry: number,
+    consumed: boolean,
 ): boolean {
+    if (consumed) return false;
     if (Date.now() > nonceExpiry) return false;
+    if (!qrNonce || !receivedNonce) return false;
     return receivedNonce === qrNonce;
 }
 

@@ -1,34 +1,16 @@
 {
     "name": "monorepo",
     "private": true,
-    "scripts": {
-        "cli": "pnpm --filter happy cli",
-        "release": "node ./scripts/release.cjs",
-        "web": "pnpm --filter happy-app web"
-    },
     "workspaces": {
         "packages": [
-            "packages/happy-app",
-            "packages/happy-cli",
             "packages/cowork-agent",
             "packages/cowork-webapp"
         ]
     },
     "pnpm": {
-        "overrides": {
-            "whatwg-url": "14.2.0",
-            "parse-path": "7.0.3",
-            "@types/parse-path": "7.0.3"
-        },
         "onlyBuiltDependencies": [
-            "@more-tech/react-native-libsodium",
-            "@shopify/react-native-skia",
-            "esbuild",
-            "sharp"
+            "esbuild"
         ]
     },
-    "packageManager": "pnpm@10.11.0",
-    "devDependencies": {
-        "wrangler": "^3.90.0"
-    }
+    "packageManager": "pnpm@10.11.0"
 }

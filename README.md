@@ -1,86 +1,86 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="/.github/logotype-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="/.github/logotype-light.png">
-    <img src="/.github/logotype-dark.png" width="400" alt="Happy">
-  </picture>
-</div>
+# cowork
 
-<h1 align="center">
-  Mobile and Web Client for Claude Code & Codex
-</h1>
+本地跑 Claude Code / Gemini CLI，浏览器里用它们。一次 QR 扫码完成配对，之后点对点 WebSocket 直连，数据不经云端中转。
 
-<h4 align="center">
-Use Claude Code or Codex from anywhere with end-to-end encryption.
-</h4>
+Fork 自 [happy-coder/happy](https://github.com/happy-coder/happy)（MIT），精简为直连场景专用版本。
 
-<div align="center">
-  
-[📱 **iOS App**](https://apps.apple.com/us/app/happy-claude-code-client/id6748571505) • [🤖 **Android App**](https://play.google.com/store/apps/details?id=com.ex3ndr.happy) • [🌐 **Web App**](https://app.happy.engineering) • [🎥 **See a Demo**](https://youtu.be/GCS0OG9QMSE) • [📚 **Documentation**](https://happy.engineering/docs/) • [💬 **Discord**](https://discord.gg/fX9WBAhyfD)
+## 两个包
 
-</div>
+| 包 | 作用 | 运行位置 |
+|---|---|---|
+| [`cowork-agent`](packages/cowork-agent) | Node 进程，桥接 Claude/Gemini CLI 与 WebSocket；启动时显示 QR | 你的开发机 |
+| [`cowork-webapp`](packages/cowork-webapp) | React + Vite 浏览器 UI，通过 QR 配对后直连 agent | 浏览器（localhost 或 Cloudflare Pages） |
 
-<img width="5178" height="2364" alt="github" src="/.github/header.png" />
+配对流程：agent 生成 Ed25519 密钥对 + 一次性 nonce（5 分钟失效）→ 终端打印 QR → webapp 扫码完成握手 → agent 签发 30 天 session credential，后续重连免扫码。
 
+## 快速开始
 
-<h3 align="center">
-Step 1: Download App
-</h3>
-
-<div align="center">
-<a href="https://apps.apple.com/us/app/happy-claude-code-client/id6748571505"><img width="135" height="39" alt="appstore" src="https://github.com/user-attachments/assets/45e31a11-cf6b-40a2-a083-6dc8d1f01291" /></a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://play.google.com/store/apps/details?id=com.ex3ndr.happy"><img width="135" height="39" alt="googleplay" src="https://github.com/user-attachments/assets/acbba639-858f-4c74-85c7-92a4096efbf5" /></a>
-</div>
-
-<h3 align="center">
-Step 2: Install CLI on your computer
-</h3>
+前置：Node ≥ 20、pnpm 10、Claude Code CLI（`claude`）或 Gemini CLI（`gemini`）在 `PATH` 中。
 
 ```bash
-npm install -g happy
+pnpm install
 ```
 
-> Migrated from the `happy-coder` package. Thanks to [@franciscop](https://github.com/franciscop) for donating the `happy` package name!
-
-<h3 align="center">
-Step 3: Start using `happy` instead of `claude` or `codex`
-</h3>
+### 启动 agent
 
 ```bash
-# Instead of claude, use:
-happy claude
-# or
-happy codex
+# Claude Code（默认）
+pnpm --filter cowork-agent dev
+
+# Gemini CLI
+pnpm --filter cowork-agent dev -- --gemini
+
+# 指定模型
+pnpm --filter cowork-agent dev -- --gemini -m gemini-2.5-pro
 ```
 
-## How does it work?
+终端会打印 QR（文本二维码）和 JSON payload。
 
-On your computer, run `happy` instead of `claude` or `happy codex` instead of `codex` to start your AI through our wrapper. When you want to control your coding agent from your phone, it restarts the session in remote mode. To switch back to your computer, just press any key on your keyboard.
+### 启动 webapp
 
-## 🔥 Why Happy Coder?
+另起一个终端：
 
-- 📱 **Mobile access to Claude Code and Codex** - Check what your AI is building while away from your desk
-- 🔔 **Push notifications** - Get alerted when Claude Code and Codex needs permission or encounters errors  
-- ⚡ **Switch devices instantly** - Take control from phone or desktop with one keypress
-- 🔐 **End-to-end encrypted** - Your code never leaves your devices unencrypted
-- 🛠️ **Open source** - Audit the code yourself. No telemetry, no tracking
+```bash
+pnpm --filter cowork-webapp dev
+# 打开 http://localhost:5173
+```
 
-## 📦 Project Components
+首页粘贴 agent 终端输出的 JSON payload（或扫描 QR），点击连接即可。30 天内同一浏览器自动重连。
 
-- **[Happy App](https://github.com/slopus/happy/tree/main/packages/happy-app)** - Web UI + mobile client (Expo)
-- **[Happy CLI](https://github.com/slopus/happy/tree/main/packages/happy-cli)** - Command-line interface for Claude Code and Codex
-- **[Happy Agent](https://github.com/slopus/happy/tree/main/packages/happy-agent)** - Remote agent control CLI (create, send, monitor sessions)
-- **[Happy Server](https://github.com/slopus/happy/tree/main/packages/happy-server)** - Backend server for encrypted sync
+## 环境变量（agent）
 
-## 🏠 Who We Are
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `COWORK_AGENT_PORT` | `4000` | WebSocket 监听端口 |
+| `COWORK_AGENT_BIND` | `127.0.0.1` | 绑定网卡。改成 `0.0.0.0` 让 LAN 其他设备可连 |
+| `COWORK_AGENT_ENDPOINT` | `ws://localhost:4000` | 写进 QR 的连接地址（webapp 连的就是这个） |
+| `COWORK_AGENT_HOME` | `~/.cowork-agent` | 密钥与日志目录（密钥文件权限 `0600`） |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | 传给 `gemini` CLI，可选 |
 
-We're engineers scattered across Bay Area coffee shops and hacker houses, constantly checking how our AI coding agents are progressing on our pet projects during lunch breaks. Happy Coder was born from the frustration of not being able to peek at our AI coding tools building our side hustles while we're away from our keyboards. We believe the best tools come from scratching your own itch and sharing with the community.
+安全默认：**只绑 `127.0.0.1`**。需要手机 / 平板跨设备连接时才 `export COWORK_AGENT_BIND=0.0.0.0` 并手动设置 `COWORK_AGENT_ENDPOINT=ws://<你的LAN-IP>:4000`。
 
-## 📚 Documentation & Contributing
+## 开发
 
-- **[Documentation Website](https://happy.engineering/docs/)** - Learn how to use Happy Coder effectively
-- **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute, PR guidelines, and development setup
-- **[Edit docs at github.com/slopus/slopus.github.io](https://github.com/slopus/slopus.github.io)** - Help improve our documentation and guides
+```bash
+# 类型检查两个包
+pnpm --filter cowork-agent --filter cowork-webapp run typecheck
+
+# 跑全部测试（vitest）
+pnpm --filter cowork-agent --filter cowork-webapp run test
+
+# 生产构建
+pnpm --filter cowork-agent build
+pnpm --filter cowork-webapp build
+```
+
+GitHub Actions：
+- [`pack-agent.yml`](.github/workflows/pack-agent.yml)：PR / push 时 typecheck + test + build + 打 tarball
+- [`deploy-cloudflare-pages.yml`](.github/workflows/deploy-cloudflare-pages.yml)：`main` 分支变更时部署 webapp 到 Cloudflare Pages
+
+## 协议文档
+
+握手、nonce、credential、消息格式、断线重连、agent 事件 payload 等细节见 [docs/protocol.md](docs/protocol.md)。
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT，见 [LICENSE](LICENSE)。

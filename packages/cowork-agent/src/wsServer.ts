@@ -15,11 +15,13 @@ import type {
 const PING_INTERVAL_MS = 30_000;
 
 /**
- * Start a WebSocket server on 0.0.0.0. Only one webapp may be connected at a
- * time — a new connection evicts the previous one.
+ * Start a WebSocket server. Binds to 127.0.0.1 by default; callers can opt into
+ * a different host (e.g. 0.0.0.0) when remote exposure is intended. Only one
+ * webapp may be connected at a time — a new connection evicts the previous one.
  */
 export function startWsServer(opts: {
     port: number;
+    host?: string;
     sessionId: string;
     cliKeys: CliKeys;
     qrPayload: DirectQRPayload;
@@ -27,12 +29,14 @@ export function startWsServer(opts: {
     onInput: InputHandler;
 }): WsServerHandle {
     const { port, sessionId, cliKeys, qrPayload, onRpc, onInput } = opts;
+    const host = opts.host ?? '127.0.0.1';
     const store = new SessionStore(200);
 
     let activeClient: WebSocket | null = null;
     let pingTimer: NodeJS.Timeout | null = null;
+    let nonceConsumed = false;
 
-    const wss = new WebSocketServer({ host: '0.0.0.0', port });
+    const wss = new WebSocketServer({ host, port });
 
     function send(ws: WebSocket, msg: CliMessage): void {
         if (ws.readyState === WebSocket.OPEN) {
@@ -88,18 +92,28 @@ export function startWsServer(opts: {
 
             if (msg.type === 'hello') {
                 if ('nonce' in msg) {
-                    if (!verifyNonce(msg.nonce, qrPayload.nonce, qrPayload.nonceExpiry)) {
-                        logger.debug('[wsServer] nonce invalid or expired');
+                    if (
+                        !verifyNonce(
+                            msg.nonce,
+                            qrPayload.nonce,
+                            qrPayload.nonceExpiry,
+                            nonceConsumed,
+                        )
+                    ) {
+                        logger.debug(
+                            `[wsServer] nonce invalid/expired/consumed (consumed=${nonceConsumed})`,
+                        );
                         send(ws, { type: 'error', message: 'nonce expired or invalid' });
                         ws.close();
                         return;
                     }
+                    nonceConsumed = true;
                     const credential = issueCredential(
                         msg.webappPublicKey,
                         sessionId,
                         cliKeys.signSecretKey,
                     );
-                    logger.debug('[wsServer] first-time handshake ok');
+                    logger.debug('[wsServer] first-time handshake ok; nonce consumed');
                     completeHandshake(ws, credential, -1);
                 } else {
                     const verified = verifyCredential(msg.sessionCredential, cliKeys.signPublicKey);

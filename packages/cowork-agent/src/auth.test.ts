@@ -54,14 +54,20 @@ describe('buildQRPayload', () => {
 });
 
 describe('verifyNonce', () => {
-    it('passes when nonce matches and not expired', () => {
-        expect(verifyNonce('n', 'n', Date.now() + 60_000)).toBe(true);
+    it('passes when nonce matches, not expired, not consumed', () => {
+        expect(verifyNonce('n', 'n', Date.now() + 60_000, false)).toBe(true);
     });
     it('fails on mismatch', () => {
-        expect(verifyNonce('a', 'b', Date.now() + 60_000)).toBe(false);
+        expect(verifyNonce('a', 'b', Date.now() + 60_000, false)).toBe(false);
     });
     it('fails when expired', () => {
-        expect(verifyNonce('n', 'n', Date.now() - 1)).toBe(false);
+        expect(verifyNonce('n', 'n', Date.now() - 1, false)).toBe(false);
+    });
+    it('fails when already consumed (one-time)', () => {
+        expect(verifyNonce('n', 'n', Date.now() + 60_000, true)).toBe(false);
+    });
+    it('fails when empty strings (defence in depth)', () => {
+        expect(verifyNonce('', '', Date.now() + 60_000, false)).toBe(false);
     });
 });
 

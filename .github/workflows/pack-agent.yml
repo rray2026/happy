@@ -1,0 +1,52 @@
+name: Pack cowork-agent
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [main]
+        paths:
+            - 'packages/cowork-agent/**'
+            - '.github/workflows/pack-agent.yml'
+
+jobs:
+    pack:
+        name: Build & Pack cowork-agent
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: read
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install pnpm
+              uses: pnpm/action-setup@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile --filter cowork-agent...
+
+            - name: Typecheck
+              run: pnpm --filter cowork-agent typecheck
+
+            - name: Test
+              run: pnpm --filter cowork-agent test
+
+            - name: Build
+              run: pnpm --filter cowork-agent build
+
+            - name: Pack
+              run: pnpm --filter cowork-agent pack --pack-destination /tmp/cowork-agent-pack
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: cowork-agent
+                  path: /tmp/cowork-agent-pack/*.tgz
+                  retention-days: 7
