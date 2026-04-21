@@ -152,6 +152,7 @@ export class GeminiAcpSession {
     private readonly broadcast: BroadcastFn;
     private readonly apiKey: string | undefined;
     private readonly onPermissionRequest: PermissionRequestFn | undefined;
+    private readonly onSessionIdCb: ((id: string) => void) | undefined;
     private readonly resumeSessionId: string | undefined;
     private readonly model: string | undefined;
     private readonly command: string;
@@ -161,6 +162,10 @@ export class GeminiAcpSession {
         broadcast: BroadcastFn;
         apiKey?: string;
         onPermissionRequest?: PermissionRequestFn;
+        /** Fired once the ACP session id is known — either resumed via
+         *  `session/load` or freshly allocated via `session/new`. Used by the
+         *  owner to persist the id for future restarts. */
+        onSessionId?: (id: string) => void;
         resumeSessionId?: string;
         model?: string;
         /** Override the `gemini` binary name/path. Defaults to `'gemini'`. Intended for tests. */
@@ -171,6 +176,7 @@ export class GeminiAcpSession {
         this.broadcast = opts.broadcast;
         this.apiKey = opts.apiKey;
         this.onPermissionRequest = opts.onPermissionRequest;
+        this.onSessionIdCb = opts.onSessionId;
         this.resumeSessionId = opts.resumeSessionId;
         this.model = opts.model;
         this.command = opts.command ?? 'gemini';
@@ -282,6 +288,7 @@ export class GeminiAcpSession {
                 if (typeof loadedId === 'string') {
                     this.acpSessionId = loadedId;
                     logger.debug('[gemini] session resumed:', loadedId);
+                    this.onSessionIdCb?.(loadedId);
                     return;
                 }
             } catch (err) {
@@ -302,6 +309,7 @@ export class GeminiAcpSession {
         }
         this.acpSessionId = sessionId;
         logger.debug('[gemini] session ready:', sessionId);
+        this.onSessionIdCb?.(sessionId);
     }
 
     private handleIncoming(msg: JsonRpcMsg): void {

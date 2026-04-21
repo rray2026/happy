@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import { buildQRPayload, loadOrGenerateCliKeys } from './auth.js';
-import { keysPath } from './config.js';
+import { keysPath, sessionsDir } from './config.js';
 import { logger } from './logger.js';
 import { displayQRCode } from './qrcode.js';
 import { SessionManager, type Tool } from './sessionManager.js';
+import { loadAllSessions, removeSession, saveSession } from './sessionStorage.js';
 import type { WsServerHandle } from './types.js';
 import { startWsServer } from './wsServer.js';
 
@@ -65,7 +66,13 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         geminiApiKey: opts.geminiApiKey,
         onBroadcast: (sid, seq, payload) => server.pushMessage(sid, seq, payload),
         onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
+        onPersist: (session) => saveSession(sessionsDir, session),
+        onPersistRemove: (sid) => removeSession(sessionsDir, sid),
     });
+
+    // Read persisted session files *before* starting the server (pure I/O, no
+    // side effects on the manager yet), so we can decide whether to auto-create.
+    const restored = loadAllSessions(sessionsDir, process.cwd());
 
     server = startWsServer({
         port: opts.port,
@@ -83,16 +90,27 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         onRpc: (id, method, params) => handleRpc(id, method, params, manager, server),
     });
 
-    // Auto-create one initial session from CLI flags, so `cowork-agent --gemini`
-    // still "just works" without the webapp needing to create a session first.
-    try {
-        manager.create({
-            tool: opts.agent,
-            model: opts.model,
-            agentArgs: opts.agentArgs,
-        });
-    } catch (err) {
-        logger.debug('[serve] initial session create failed:', (err as Error).message);
+    // Rehydrate / auto-create AFTER server is assigned. Both rehydrate() and
+    // create() fire onSessionsChanged → server.pushSessionsChanged(...), which
+    // would otherwise crash with "Cannot read properties of undefined". The
+    // server has no clients at this point, so pushSessionsChanged is a no-op
+    // on the wire — we just need the reference to exist.
+    if (restored.length > 0) {
+        logger.debug(`[serve] rehydrating ${restored.length} session(s)`);
+        manager.rehydrate(restored);
+    } else {
+        // Auto-create one initial session from CLI flags only when there's
+        // nothing to restore. Rehydrated sessions carry their own tool/model
+        // choice, so we shouldn't layer another one on top.
+        try {
+            manager.create({
+                tool: opts.agent,
+                model: opts.model,
+                agentArgs: opts.agentArgs,
+            });
+        } catch (err) {
+            logger.debug('[serve] initial session create failed:', (err as Error).message);
+        }
     }
 
     const qrJson = JSON.stringify(qrPayload);

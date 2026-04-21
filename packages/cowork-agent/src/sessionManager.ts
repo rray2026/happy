@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { runClaudeProcess } from './claudeProcess.js';
 import { GeminiAcpSession } from './geminiAcp.js';
 import { logger } from './logger.js';
+import type { PersistedSession } from './sessionStorage.js';
 import { SessionStore } from './sessionStore.js';
 
 export type Tool = 'claude' | 'gemini';
@@ -31,6 +32,14 @@ export interface SessionManagerOptions {
     onBroadcast: (sessionId: string, seq: number, payload: unknown) => void;
     /** Called whenever the session list changes (create / close). */
     onSessionsChanged?: (sessions: SessionMeta[]) => void;
+    /**
+     * Persistence hook: fires whenever a session's persistable shape changes
+     * (create, or when a CLI reports a resume id). Implementations should
+     * write the record to disk so the session can be rehydrated on next start.
+     */
+    onPersist?: (session: PersistedSession) => void;
+    /** Persistence hook: fires when a session is closed. */
+    onPersistRemove?: (sessionId: string) => void;
 
     // Test overrides: fake binaries + env
     claudeCommand?: string;
@@ -49,6 +58,9 @@ interface SessionEntry {
     store: SessionStore;
     // Agent process state
     claudeSessionId: string | null;
+    /** Last-known Gemini ACP sessionId; mirrors geminiSession?.getSessionId()
+     *  but survives process disposal so it can be persisted + resumed. */
+    geminiSessionId: string | null;
     geminiSession: GeminiAcpSession | null;
     agentBusy: boolean;
     abort: AbortController;
@@ -86,36 +98,98 @@ export class SessionManager {
     }
 
     create(params: CreateSessionParams): SessionMeta {
-        if (this.sessions.size >= MAX_SESSIONS) {
-            throw new Error(`session limit reached (max ${MAX_SESSIONS})`);
-        }
-        const id = randomUUID();
-        const entry: SessionEntry = {
-            id,
+        const entry = this.buildEntry({
+            id: randomUUID(),
             tool: params.tool,
             model: params.model,
             cwd: this.opts.cwd,
             createdAt: Date.now(),
             agentArgs: params.agentArgs ?? [],
-            store: new SessionStore(200),
             claudeSessionId: null,
+            geminiSessionId: null,
+        });
+        logger.debug(`[sessionManager] created ${entry.id} tool=${entry.tool}`);
+        this.persistEntry(entry);
+        this.emitSessionsChanged();
+        return this.toMeta(entry);
+    }
+
+    /**
+     * Restore previously persisted sessions without re-persisting them or
+     * spawning their CLI subprocess. Called once on startup from the list
+     * returned by `loadAllSessions`.
+     *
+     * Subprocess spawn is deferred until the first `handleInput`, at which
+     * point Claude picks up `--resume <claudeSessionId>` and Gemini issues
+     * `session/load` with the stored ACP id.
+     */
+    rehydrate(sessions: PersistedSession[]): void {
+        for (const p of sessions) {
+            if (this.sessions.has(p.id)) continue;
+            if (this.sessions.size >= MAX_SESSIONS) {
+                logger.debug('[sessionManager] rehydrate: hit MAX_SESSIONS, dropping', p.id);
+                continue;
+            }
+            // Caller filtered by cwd already, but double-check: a stale file
+            // could otherwise slip in and poison Claude's `--resume`.
+            if (p.cwd !== this.opts.cwd) continue;
+            const entry = this.buildEntry(p);
+            logger.debug(
+                `[sessionManager] rehydrated ${entry.id} tool=${entry.tool}` +
+                    (entry.claudeSessionId ? ` claude=${entry.claudeSessionId}` : '') +
+                    (entry.geminiSessionId ? ` gemini=${entry.geminiSessionId}` : ''),
+            );
+        }
+        if (sessions.length > 0) this.emitSessionsChanged();
+    }
+
+    /** Shared between `create` (new) and `rehydrate` (restored). */
+    private buildEntry(p: {
+        id: string;
+        tool: Tool;
+        model: string | undefined;
+        cwd: string;
+        createdAt: number;
+        agentArgs: string[];
+        claudeSessionId: string | null;
+        geminiSessionId: string | null;
+    }): SessionEntry {
+        if (this.sessions.size >= MAX_SESSIONS) {
+            throw new Error(`session limit reached (max ${MAX_SESSIONS})`);
+        }
+        const entry: SessionEntry = {
+            id: p.id,
+            tool: p.tool,
+            model: p.model,
+            cwd: p.cwd,
+            createdAt: p.createdAt,
+            agentArgs: p.agentArgs,
+            store: new SessionStore(200),
+            claudeSessionId: p.claudeSessionId,
+            geminiSessionId: p.geminiSessionId,
             geminiSession: null,
             agentBusy: false,
             abort: new AbortController(),
             permissionPending: new Map(),
         };
 
-        if (params.tool === 'gemini') {
+        if (p.tool === 'gemini') {
             entry.geminiSession = new GeminiAcpSession({
-                broadcast: (e) => this.appendAndBroadcast(id, e),
+                broadcast: (e) => this.appendAndBroadcast(entry.id, e),
                 apiKey: this.opts.geminiApiKey,
-                model: params.model,
+                model: p.model,
+                resumeSessionId: p.geminiSessionId ?? undefined,
                 command: this.opts.geminiCommand,
                 extraEnv: this.opts.geminiExtraEnv,
+                onSessionId: (acpId) => {
+                    if (entry.geminiSessionId === acpId) return;
+                    entry.geminiSessionId = acpId;
+                    this.persistEntry(entry);
+                },
                 onPermissionRequest: (permissionId, toolName, input) =>
                     new Promise<boolean>((resolve) => {
                         entry.permissionPending.set(permissionId, resolve);
-                        this.appendAndBroadcast(id, {
+                        this.appendAndBroadcast(entry.id, {
                             type: 'permission-request',
                             permissionId,
                             toolName,
@@ -125,10 +199,8 @@ export class SessionManager {
             });
         }
 
-        this.sessions.set(id, entry);
-        logger.debug(`[sessionManager] created ${id} tool=${entry.tool}`);
-        this.emitSessionsChanged();
-        return this.toMeta(entry);
+        this.sessions.set(entry.id, entry);
+        return entry;
     }
 
     close(sessionId: string): boolean {
@@ -138,6 +210,7 @@ export class SessionManager {
         entry.geminiSession?.dispose();
         this.sessions.delete(sessionId);
         logger.debug(`[sessionManager] closed ${sessionId}`);
+        this.opts.onPersistRemove?.(sessionId);
         this.emitSessionsChanged();
         return true;
     }
@@ -186,7 +259,11 @@ export class SessionManager {
                 agentArgs: entry.agentArgs,
                 onEvent: (e) => this.appendAndBroadcast(sessionId, e),
                 onSessionId: (cid) => {
-                    if (!entry.claudeSessionId) entry.claudeSessionId = cid;
+                    // Persist on first observation only — Claude re-emits the
+                    // same id on every turn, no point rewriting the file.
+                    if (entry.claudeSessionId === cid) return;
+                    entry.claudeSessionId = cid;
+                    this.persistEntry(entry);
                 },
                 abort: entry.abort.signal,
                 command: this.opts.claudeCommand,
@@ -240,6 +317,20 @@ export class SessionManager {
 
     private emitSessionsChanged(): void {
         this.opts.onSessionsChanged?.(this.list());
+    }
+
+    private persistEntry(entry: SessionEntry): void {
+        if (!this.opts.onPersist) return;
+        this.opts.onPersist({
+            id: entry.id,
+            tool: entry.tool,
+            model: entry.model,
+            cwd: entry.cwd,
+            createdAt: entry.createdAt,
+            agentArgs: entry.agentArgs,
+            claudeSessionId: entry.claudeSessionId,
+            geminiSessionId: entry.geminiSessionId,
+        });
     }
 
     private toMeta(e: SessionEntry): SessionMeta {

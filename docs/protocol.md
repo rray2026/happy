@@ -467,6 +467,72 @@ getDelta(fromSeq)
 
 ---
 
+## 11.5 Chat Session 持久化（agent 端）
+
+**SessionStore（事件流）是进程内的**（agent 重启即丢失），但 **chat session 的 metadata 和 CLI resume 凭据会持久化到磁盘**，让 `cowork-agent serve` 重启后仍能恢复之前打开的聊天框，并让 CLI 子进程以 `--resume` / `session/load` 续接上次对话。
+
+### 磁盘布局
+
+```
+~/.cowork-agent/
+├── serve-keys.json          # CLI 身份 + 连接级 sessionId（见 §12）
+├── sessions/                # ← 每个 chat session 一个 JSON 文件
+│   ├── <chatSessionId>.json
+│   ├── <chatSessionId>.json
+│   └── ...
+└── logs/
+```
+
+> 注：老版本只有一个 `serve-state.json`（形如 `{geminiSessionId, cwd}`），天然只能存一个 session，已被废弃。agent 启动时会自动清理残留的 `serve-state.json`。
+
+### 每个 session 文件字段
+
+```ts
+{
+  id: string;                         // chat sessionId（= 文件名）
+  tool: 'claude' | 'gemini';
+  model: string | undefined;
+  cwd: string;                        // 创建时的工作目录（用于过滤）
+  createdAt: number;                  // Date.now()
+  agentArgs: string[];                // CLI 额外参数（透传给子进程）
+  claudeSessionId: string | null;     // claude --resume <id>
+  geminiSessionId: string | null;     // Gemini ACP session/load <id>
+}
+```
+
+**cwd 过滤**：启动时 `loadAllSessions(sessionsDir, process.cwd())` 只载入 `cwd === process.cwd()` 的 session——在别的目录启动 `cowork-agent` 不会串到本目录的会话上，也不会错误地把 `--resume` 指向另一个 repo 的 Claude 会话。其他目录的文件保留在磁盘上，由各自的启动实例各自 rehydrate。
+
+### 写入时机
+
+| 事件 | 行为 |
+|------|------|
+| `SessionManager.create()` | 写新文件（`claudeSessionId` 和 `geminiSessionId` 均为 null） |
+| Claude 子进程首次报 `session_id` | 更新文件，填入 `claudeSessionId` |
+| Gemini ACP `session/new` 或 `session/load` 返回 id | 更新文件，填入 `geminiSessionId` |
+| `SessionManager.close()` | 删除文件 |
+| `SessionManager.dispose()` | **不**删除文件（用于下次 rehydrate） |
+
+### 启动流程
+
+```
+cowork-agent serve 启动
+  ↓
+loadAllSessions(sessionsDir, cwd)  →  [PersistedSession, ...]
+  ↓
+manager.rehydrate(restored)
+  ├─ 每个恢复的 session 重建一个 SessionEntry（空的 SessionStore + 原有 CLI ids）
+  └─ Gemini session 构造时传 resumeSessionId，首次 sendPrompt 时尝试 session/load
+  ↓
+startWsServer(...)
+  ↓
+如果 restored.length === 0：按 CLI flags 自动创建一个新 session
+否则：跳过自动创建（由恢复的 session 负责 `cowork-agent --gemini` 仍可用的语义）
+```
+
+重连时 webapp 在 `welcome.sessions` 里看到这些恢复的 session，每个 session 的 `currentSeq` 是 `-1`（事件流是空的，因为进程刚起），webapp 通过按 session 的 `lastSeqs` 发 `hello` 触发 replay——replay 结果也是空，但是 session **仍然存在且可用**，用户在 session 里发消息时 Claude/Gemini 子进程会续接原来的对话。
+
+---
+
 ## 12. 认证与加密
 
 ### 密钥体系
