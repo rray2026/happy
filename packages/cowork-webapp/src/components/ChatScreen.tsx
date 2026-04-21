@@ -5,6 +5,7 @@ import type { ChatSessionMeta, ClaudeEvent, Item, PermissionEvent, SocketStatus,
 import { eventToItems, mergeItems, uid } from '../session/events';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
+import { Modal } from './Modal';
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -23,10 +24,15 @@ const ToolsItem = memo(function ToolsItem({ calls }: { calls: ToolCall[] }) {
     const label = calls.length === 1 ? calls[0].name : `${calls.length} tool calls`;
     return (
         <div className="tools-group">
-            <button className="tools-header" onClick={() => setOpen((o) => !o)}>
-                <span className="tools-icon">⚙</span>
+            <button
+                type="button"
+                className="tools-header"
+                onClick={() => setOpen((o) => !o)}
+                aria-expanded={open}
+            >
+                <span className="tools-icon" aria-hidden="true">⚙</span>
                 <span className="tools-label">{label}</span>
-                <span className="tools-chevron">{open ? '▾' : '▸'}</span>
+                <span className="tools-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
             </button>
             {open && (
                 <ul className="tools-list">
@@ -49,7 +55,13 @@ const MessageItem = memo(function MessageItem({ item }: { item: Item }) {
         case 'user':
             return <div className="msg-user"><div className="msg-user-bubble">{item.text}</div></div>;
         case 'assistant':
-            return <div className="msg-assistant"><MarkdownMessage text={item.text} /></div>;
+            return (
+                <div className="msg-assistant">
+                    <div className="msg-assistant-bubble">
+                        <MarkdownMessage text={item.text} />
+                    </div>
+                </div>
+            );
         case 'tools':
             return <div className="msg-tools"><ToolsItem calls={item.calls} /></div>;
         case 'result':
@@ -65,7 +77,7 @@ const MessageItem = memo(function MessageItem({ item }: { item: Item }) {
 
 const TypingDots = memo(function TypingDots() {
     return (
-        <div className="typing-dots">
+        <div className="typing-dots" aria-label="AI 正在输入">
             <span /><span /><span />
         </div>
     );
@@ -88,6 +100,8 @@ export function ChatScreen() {
     const [logLines, setLogLines] = useState<string[]>([]);
     const [logPath, setLogPath] = useState('');
     const [logsLoading, setLogsLoading] = useState(false);
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -178,6 +192,25 @@ export function ChatScreen() {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [items, thinking]);
 
+    // Lock body scroll while the mobile drawer is open so the background page
+    // stays put when users swipe inside the drawer list.
+    useEffect(() => {
+        if (!drawerOpen) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = prev; };
+    }, [drawerOpen]);
+
+    // Escape closes the drawer on mobile.
+    useEffect(() => {
+        if (!drawerOpen) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setDrawerOpen(false);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [drawerOpen]);
+
     const activeSession = sessions.find((s) => s.id === sessionId);
 
     const handleSend = useCallback(() => {
@@ -213,9 +246,10 @@ export function ChatScreen() {
         navigate('/');
     }, [navigate]);
 
-    const handleDisconnect = useCallback(() => {
+    const handleDisconnectConfirmed = useCallback(() => {
         sessionClient.disconnect();
         sessionClient.clearCredentials();
+        setConfirmDisconnect(false);
         navigate('/');
     }, [navigate]);
 
@@ -240,31 +274,72 @@ export function ChatScreen() {
 
     return (
         <div className="chat-screen">
-            <SessionSidebar activeSessionId={sessionId} />
+            <SessionSidebar
+                activeSessionId={sessionId}
+                drawerOpen={drawerOpen}
+                onCloseDrawer={() => setDrawerOpen(false)}
+            />
+            <div
+                className={`drawer-backdrop${drawerOpen ? ' open' : ''}`}
+                onClick={() => setDrawerOpen(false)}
+                aria-hidden="true"
+            />
 
             <div className="chat-main">
-                {permission && (
-                    <div className="modal-overlay" onClick={() => handlePermission(false)}>
-                        <div className="modal-card" onClick={e => e.stopPropagation()}>
-                            <h3 className="modal-title">Permission Request</h3>
+                {/* Permission request */}
+                <Modal
+                    open={!!permission}
+                    title="Permission Request"
+                    onClose={() => handlePermission(false)}
+                    size="md"
+                >
+                    {permission && (
+                        <div className="modal-body">
                             <p className="modal-tool">{permission.toolName}</p>
                             <pre className="modal-input">{JSON.stringify(permission.input, null, 2)}</pre>
                             <div className="modal-actions">
-                                <button className="modal-btn deny" onClick={() => handlePermission(false)}>Deny</button>
-                                <button className="modal-btn approve" onClick={() => handlePermission(true)}>Approve</button>
+                                <button
+                                    type="button"
+                                    className="btn btn-danger"
+                                    onClick={() => handlePermission(false)}
+                                >
+                                    Deny
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={() => handlePermission(true)}
+                                >
+                                    Approve
+                                </button>
                             </div>
                         </div>
-                    </div>
-                )}
+                    )}
+                </Modal>
 
-                {logsOpen && (
-                    <div className="logs-modal">
+                {/* Logs viewer */}
+                <Modal
+                    open={logsOpen}
+                    title="CLI Logs"
+                    onClose={() => setLogsOpen(false)}
+                    size="lg"
+                    bare
+                    ariaLabel="CLI Logs"
+                >
+                    <div className="logs-modal-card">
                         <div className="logs-header">
-                            <div>
+                            <div className="logs-title-group">
                                 <div className="logs-title">CLI Logs</div>
                                 {logPath && <div className="logs-path">{logPath}</div>}
                             </div>
-                            <button className="logs-close" onClick={() => setLogsOpen(false)}>✕</button>
+                            <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={() => setLogsOpen(false)}
+                                aria-label="关闭日志"
+                            >
+                                ✕
+                            </button>
                         </div>
                         <div className="logs-body">
                             {logsLoading
@@ -276,11 +351,49 @@ export function ChatScreen() {
                             <div ref={logsBottomRef} />
                         </div>
                     </div>
-                )}
+                </Modal>
+
+                {/* Disconnect confirmation */}
+                <Modal
+                    open={confirmDisconnect}
+                    title="断开并清除凭据？"
+                    onClose={() => setConfirmDisconnect(false)}
+                    size="sm"
+                >
+                    <div className="modal-body">
+                        <p className="confirm-text">
+                            这会断开当前连接并删除本浏览器里保存的 session 凭据。下次需要重新粘贴 payload。
+                        </p>
+                        <div className="modal-actions">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => setConfirmDisconnect(false)}
+                            >
+                                取消
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-danger"
+                                onClick={handleDisconnectConfirmed}
+                            >
+                                断开
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
 
                 <div className="chat-header">
                     <div className="chat-status">
-                        <span className={`status-dot ${statusDot}`} />
+                        <button
+                            type="button"
+                            className="icon-btn chat-header-menu-btn"
+                            onClick={() => setDrawerOpen(true)}
+                            aria-label="打开会话列表"
+                        >
+                            ☰
+                        </button>
+                        <span className={`status-dot ${statusDot}`} aria-hidden="true" />
                         <span className="status-label">{statusLabel}</span>
                         {activeSession && (
                             <span className="chat-session-label">
@@ -294,10 +407,34 @@ export function ChatScreen() {
                     </div>
                     <div className="chat-header-actions">
                         {status === 'connected' && (
-                            <button className="icon-btn" onClick={handleOpenLogs} title="查看日志">📋</button>
+                            <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={handleOpenLogs}
+                                aria-label="查看日志"
+                                title="查看日志"
+                            >
+                                📋
+                            </button>
                         )}
-                        <button className="icon-btn" onClick={handleBackToHome} title="返回首页">⌂</button>
-                        <button className="icon-btn disconnect-btn" onClick={handleDisconnect} title="断开并清除">✕</button>
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={handleBackToHome}
+                            aria-label="返回首页"
+                            title="返回首页"
+                        >
+                            ⌂
+                        </button>
+                        <button
+                            type="button"
+                            className="icon-btn icon-btn-danger"
+                            onClick={() => setConfirmDisconnect(true)}
+                            aria-label="断开并清除凭据"
+                            title="断开并清除"
+                        >
+                            ✕
+                        </button>
                     </div>
                 </div>
 
@@ -325,9 +462,11 @@ export function ChatScreen() {
                             disabled={status !== 'connected' || thinking || !sessionId}
                         />
                         <button
+                            type="button"
                             className="chat-send-btn"
                             onClick={handleSend}
                             disabled={!input.trim() || status !== 'connected' || thinking || !sessionId}
+                            aria-label="发送消息"
                         >
                             ↑
                         </button>

@@ -114,10 +114,20 @@ export function ConnectScreen() {
                             </div>
                             {resumeError && <p className="connect-error">{resumeError}</p>}
                             <div className="resume-actions">
-                                <button className="connect-btn resume-btn" onClick={handleResume} disabled={resuming}>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary btn-lg"
+                                    onClick={handleResume}
+                                    disabled={resuming}
+                                >
                                     {resuming ? '连接中…' : '恢复连接'}
                                 </button>
-                                <button className="forget-btn" onClick={handleForget} disabled={resuming}>
+                                <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    onClick={handleForget}
+                                    disabled={resuming}
+                                >
                                     忘记
                                 </button>
                             </div>
@@ -143,7 +153,12 @@ export function ConnectScreen() {
                     spellCheck={false}
                 />
                 {connectError && <p className="connect-error">{connectError}</p>}
-                <button className="connect-btn" onClick={handleConnect} disabled={!text.trim() || connecting}>
+                <button
+                    type="button"
+                    className="btn btn-primary btn-lg btn-block"
+                    onClick={handleConnect}
+                    disabled={!text.trim() || connecting}
+                >
                     {connecting ? '连接中…' : '新建连接'}
                 </button>
             </div>

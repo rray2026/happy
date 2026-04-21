@@ -49,14 +49,16 @@ export function ChatLanding() {
                     </div>
                     <div className="chat-empty-actions">
                         <button
-                            className="connect-btn"
+                            type="button"
+                            className="btn btn-primary btn-lg"
                             disabled={status !== 'connected'}
                             onClick={() => createSession('claude')}
                         >
                             新建 Claude 会话
                         </button>
                         <button
-                            className="connect-btn"
+                            type="button"
+                            className="btn btn-secondary btn-lg"
                             disabled={status !== 'connected'}
                             onClick={() => createSession('gemini')}
                         >
