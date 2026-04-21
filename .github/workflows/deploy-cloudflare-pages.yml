@@ -13,18 +13,28 @@ on:
                     - preview
                     - development
     push:
-        branches: [main]
+        branches: [main, 'claude/*']
         paths:
             - 'packages/cowork-webapp/**'
 
-# Only one deploy runs at a time; new runs cancel older pending ones.
+# Only one deploy runs at a time per target environment; new runs cancel older pending ones.
 concurrency:
-    group: deploy-cloudflare-pages-${{ github.event.inputs.environment || 'production' }}
+    group: >-
+        deploy-cloudflare-pages-${{
+          github.event_name == 'workflow_dispatch' && github.event.inputs.environment ||
+          github.ref_name == 'main' && 'production' ||
+          'development'
+        }}
     cancel-in-progress: true
 
 jobs:
     deploy:
-        name: Build & Deploy (${{ github.event.inputs.environment || 'production' }})
+        name: >-
+            Build & Deploy (${{
+              github.event_name == 'workflow_dispatch' && github.event.inputs.environment ||
+              github.ref_name == 'main' && 'production' ||
+              'development'
+            }})
         runs-on: ubuntu-latest
         timeout-minutes: 20
         permissions:
@@ -34,6 +44,17 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+
+            - name: Determine environment
+              id: env
+              run: |
+                  if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                    echo "name=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+                  elif [ "${{ github.ref_name }}" = "main" ]; then
+                    echo "name=production" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "name=development" >> "$GITHUB_OUTPUT"
+                  fi
 
             - name: Install pnpm
               uses: pnpm/action-setup@v4
@@ -61,5 +82,5 @@ jobs:
                   command: >
                       pages deploy dist
                       --project-name=${{ vars.CF_PAGES_PROJECT_NAME }}
-                      --branch=${{ (github.event.inputs.environment || 'production') == 'production' && 'main' || (github.event.inputs.environment || 'production') }}
+                      --branch=${{ steps.env.outputs.name == 'production' && 'main' || steps.env.outputs.name }}
                       --commit-dirty=true

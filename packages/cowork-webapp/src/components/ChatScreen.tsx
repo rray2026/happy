@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, X } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta, ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
 import { eventToItems, mergeItems, uid } from '../session/events';
@@ -7,21 +8,32 @@ import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const isTouchDevice = typeof window !== 'undefined' &&
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
+function formatMsgTime(ts?: number): string {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) + ' ' +
+        d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
 
 function formatToolInput(input: unknown): string {
     if (input == null) return '';
     if (typeof input === 'string') return input;
-    try {
-        return JSON.stringify(input, null, 2);
-    } catch {
-        return String(input);
-    }
+    try { return JSON.stringify(input, null, 2); } catch { return String(input); }
 }
+
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 const ToolsItem = memo(function ToolsItem({ calls }: { calls: ToolCall[] }) {
     const [open, setOpen] = useState(false);
-    const label = calls.length === 1 ? calls[0].name : `${calls.length} tool calls`;
+    const label = calls.length === 1 ? calls[0].name : `${calls.length} 个工具调用`;
     return (
         <div className="tools-group">
             <button
@@ -51,15 +63,22 @@ const ToolsItem = memo(function ToolsItem({ calls }: { calls: ToolCall[] }) {
 });
 
 const MessageItem = memo(function MessageItem({ item }: { item: Item }) {
+    const time = formatMsgTime(item.timestamp);
     switch (item.kind) {
         case 'user':
-            return <div className="msg-user"><div className="msg-user-bubble">{item.text}</div></div>;
+            return (
+                <div className="msg-user">
+                    <div className="msg-user-bubble">{item.text}</div>
+                    {time && <div className="msg-time">{time}</div>}
+                </div>
+            );
         case 'assistant':
             return (
                 <div className="msg-assistant">
-                    <div className="msg-assistant-bubble">
+                    <div className={`msg-assistant-bubble${item.streaming ? ' streaming' : ''}`}>
                         <MarkdownMessage text={item.text} />
                     </div>
+                    {!item.streaming && time && <div className="msg-time">{time}</div>}
                 </div>
             );
         case 'tools':
@@ -77,8 +96,10 @@ const MessageItem = memo(function MessageItem({ item }: { item: Item }) {
 
 const TypingDots = memo(function TypingDots() {
     return (
-        <div className="typing-dots" aria-label="AI 正在输入">
-            <span /><span /><span />
+        <div className="typing-wrap">
+            <div className="typing-dots" aria-label="AI 正在输入">
+                <span /><span /><span />
+            </div>
         </div>
     );
 });
@@ -101,28 +122,15 @@ export function ChatScreen() {
     const [logPath, setLogPath] = useState('');
     const [logsLoading, setLogsLoading] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
-    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+    const [showScrollBtn, setShowScrollBtn] = useState(false);
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const logsBottomRef = useRef<HTMLDivElement>(null);
-    /**
-     * Per-session seq dedupe. SessionClient tracks `lastSeqs` but dispatches
-     * every inbound `message` unconditionally (it has no payload cache), so a
-     * `session.replay` RPC that re-emits the entire stream will deliver events
-     * that the welcome-handshake delta already delivered. Without dedupe the
-     * user would see duplicate items. Cleared on sessionId change.
-     */
+    const messagesRef = useRef<HTMLDivElement>(null);
+    // Keyed by sessionId via the parent route wrapper — seenSeqs initialises fresh
+    // on every mount, so no reset effect is needed.
     const seenSeqs = useRef<Set<number>>(new Set());
-
-    // Reset per-session UI state when the route param changes: different
-    // chat → different event stream → different messages.
-    useEffect(() => {
-        setItems([]);
-        setThinking(false);
-        setPermission(null);
-        seenSeqs.current = new Set();
-    }, [sessionId]);
 
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
@@ -141,24 +149,9 @@ export function ChatScreen() {
             if (!newItems.length) return;
             setItems(prev => mergeItems(prev, newItems));
         });
-
         return () => { unsubStatus(); unsubSessions(); unsubMsg(); };
     }, [sessionId]);
 
-    /**
-     * Pull the full event stream for this session once the connection is up.
-     *
-     * Why: SessionClient's `hello.lastSeqs` only asks the agent to replay
-     * events with `seq > lastSeqs[sid]`. After a webapp reload, ChatScreen
-     * re-mounts with empty `items` but `lastSeqs` still points at the last
-     * seen seq — so the welcome-handshake delta is typically empty and the
-     * conversation looks blank. We work around that by explicitly asking the
-     * agent to replay from `-1` (the whole buffer, up to SessionStore's
-     * circular-buffer cap of 200 entries).
-     *
-     * Dedupe is handled by `seenSeqs`; this call is safe to fire even when
-     * the welcome delta already delivered part of the stream.
-     */
     useEffect(() => {
         if (!sessionId) return;
         let cancelled = false;
@@ -166,34 +159,25 @@ export function ChatScreen() {
             if (cancelled) return;
             sessionClient
                 .rpc(uid(), 'session.replay', { sessionId, fromSeq: -1 })
-                .catch(() => {
-                    /* silent: agent disconnects / unknown session ids are
-                     * non-fatal; UI will stay empty and recover on next mount. */
-                });
+                .catch(() => {});
         };
         if (sessionClient.getStatus() === 'connected') {
             requestReplay();
             return () => { cancelled = true; };
         }
-        // Not yet connected — wait for the first 'connected' transition.
         const unsub = sessionClient.onStatusChange((s) => {
-            if (s === 'connected') {
-                unsub();
-                requestReplay();
-            }
+            if (s === 'connected') { unsub(); requestReplay(); }
         });
-        return () => {
-            cancelled = true;
-            unsub();
-        };
+        return () => { cancelled = true; unsub(); };
     }, [sessionId]);
 
+    // Auto-scroll to bottom only when not scrolled up
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [items, thinking]);
+        if (!showScrollBtn) {
+            bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [items, thinking, showScrollBtn]);
 
-    // Lock body scroll while the mobile drawer is open so the background page
-    // stays put when users swipe inside the drawer list.
     useEffect(() => {
         if (!drawerOpen) return;
         const prev = document.body.style.overflow;
@@ -201,17 +185,29 @@ export function ChatScreen() {
         return () => { document.body.style.overflow = prev; };
     }, [drawerOpen]);
 
-    // Escape closes the drawer on mobile.
     useEffect(() => {
         if (!drawerOpen) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setDrawerOpen(false);
-        };
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false); };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [drawerOpen]);
 
-    const activeSession = sessions.find((s) => s.id === sessionId);
+    const handleScroll = useCallback(() => {
+        const el = messagesRef.current;
+        if (!el) return;
+        setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+    }, []);
+
+    const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
+
+    const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setInput(e.target.value);
+        const el = inputRef.current;
+        if (el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+        }
+    }, []);
 
     const handleSend = useCallback(() => {
         const text = input.trim();
@@ -219,12 +215,14 @@ export function ChatScreen() {
         sessionClient.sendInput(sessionId, text);
         setInput('');
         setThinking(true);
-        setItems(prev => [...prev, { kind: 'user', text, id: uid() }]);
+        setItems(prev => [...prev, { kind: 'user', text, id: uid(), timestamp: Date.now() }]);
+        const el = inputRef.current;
+        if (el) el.style.height = 'auto';
         setTimeout(() => inputRef.current?.focus(), 0);
     }, [input, status, sessionId]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !isTouchDevice) {
             e.preventDefault();
             handleSend();
         }
@@ -233,25 +231,10 @@ export function ChatScreen() {
     const handlePermission = useCallback((approved: boolean) => {
         if (!permission) return;
         sessionClient
-            .rpc(uid(), 'session.permissionResponse', {
-                sessionId,
-                permissionId: permission.permissionId,
-                approved,
-            })
+            .rpc(uid(), 'session.permissionResponse', { sessionId, permissionId: permission.permissionId, approved })
             .catch(() => {});
         setPermission(null);
     }, [permission, sessionId]);
-
-    const handleBackToHome = useCallback(() => {
-        navigate('/');
-    }, [navigate]);
-
-    const handleDisconnectConfirmed = useCallback(() => {
-        sessionClient.disconnect();
-        sessionClient.clearCredentials();
-        setConfirmDisconnect(false);
-        navigate('/');
-    }, [navigate]);
 
     const handleOpenLogs = useCallback(async () => {
         setLogsOpen(true);
@@ -269,8 +252,16 @@ export function ChatScreen() {
         }
     }, []);
 
-    const statusDot = status === 'connected' ? 'dot-green' : status === 'connecting' ? 'dot-orange' : status === 'error' ? 'dot-red' : 'dot-gray';
-    const statusLabel = status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'error' ? 'Error' : 'Disconnected';
+    const statusDot = status === 'connected' ? 'dot-green'
+        : status === 'connecting' ? 'dot-orange'
+        : status === 'error' ? 'dot-red'
+        : 'dot-gray';
+    const statusLabel = status === 'connected' ? '已连接'
+        : status === 'connecting' ? '连接中…'
+        : status === 'error' ? '错误'
+        : '未连接';
+
+    const placeholder = isTouchDevice ? '发消息…' : '发消息… (Enter 发送)';
 
     return (
         <div className="chat-screen">
@@ -289,7 +280,7 @@ export function ChatScreen() {
                 {/* Permission request */}
                 <Modal
                     open={!!permission}
-                    title="Permission Request"
+                    title="权限请求"
                     onClose={() => handlePermission(false)}
                     size="md"
                 >
@@ -298,19 +289,11 @@ export function ChatScreen() {
                             <p className="modal-tool">{permission.toolName}</p>
                             <pre className="modal-input">{JSON.stringify(permission.input, null, 2)}</pre>
                             <div className="modal-actions">
-                                <button
-                                    type="button"
-                                    className="btn btn-danger"
-                                    onClick={() => handlePermission(false)}
-                                >
-                                    Deny
+                                <button type="button" className="btn btn-danger" onClick={() => handlePermission(false)}>
+                                    拒绝
                                 </button>
-                                <button
-                                    type="button"
-                                    className="btn btn-primary"
-                                    onClick={() => handlePermission(true)}
-                                >
-                                    Approve
+                                <button type="button" className="btn btn-primary" onClick={() => handlePermission(true)}>
+                                    允许
                                 </button>
                             </div>
                         </div>
@@ -329,23 +312,18 @@ export function ChatScreen() {
                     <div className="logs-modal-card">
                         <div className="logs-header">
                             <div className="logs-title-group">
-                                <div className="logs-title">CLI Logs</div>
+                                <div className="logs-title">CLI 日志</div>
                                 {logPath && <div className="logs-path">{logPath}</div>}
                             </div>
-                            <button
-                                type="button"
-                                className="icon-btn"
-                                onClick={() => setLogsOpen(false)}
-                                aria-label="关闭日志"
-                            >
-                                ✕
+                            <button type="button" className="icon-btn" onClick={() => setLogsOpen(false)} aria-label="关闭日志">
+                                <X size={18} />
                             </button>
                         </div>
                         <div className="logs-body">
                             {logsLoading
-                                ? <div className="logs-loading">Loading…</div>
+                                ? <div className="logs-loading">加载中…</div>
                                 : logLines.length === 0
-                                    ? <div className="logs-empty">No log entries.</div>
+                                    ? <div className="logs-empty">暂无日志。</div>
                                     : logLines.map((line, i) => <div key={i} className="logs-line">{line}</div>)
                             }
                             <div ref={logsBottomRef} />
@@ -353,38 +331,19 @@ export function ChatScreen() {
                     </div>
                 </Modal>
 
-                {/* Disconnect confirmation */}
-                <Modal
-                    open={confirmDisconnect}
-                    title="断开并清除凭据？"
-                    onClose={() => setConfirmDisconnect(false)}
-                    size="sm"
-                >
-                    <div className="modal-body">
-                        <p className="confirm-text">
-                            这会断开当前连接并删除本浏览器里保存的 session 凭据。下次需要重新粘贴 payload。
-                        </p>
-                        <div className="modal-actions">
-                            <button
-                                type="button"
-                                className="btn btn-secondary"
-                                onClick={() => setConfirmDisconnect(false)}
-                            >
-                                取消
-                            </button>
-                            <button
-                                type="button"
-                                className="btn btn-danger"
-                                onClick={handleDisconnectConfirmed}
-                            >
-                                断开
-                            </button>
-                        </div>
-                    </div>
-                </Modal>
-
+                {/* IM-style header */}
                 <div className="chat-header">
-                    <div className="chat-status">
+                    <div className="chat-header-left">
+                        {/* Mobile: back to sessions list */}
+                        <button
+                            type="button"
+                            className="icon-btn chat-back-btn"
+                            onClick={() => navigate('/sessions')}
+                            aria-label="返回会话列表"
+                        >
+                            <ChevronLeft size={22} />
+                        </button>
+                        {/* Desktop: hamburger menu for sidebar drawer */}
                         <button
                             type="button"
                             className="icon-btn chat-header-menu-btn"
@@ -393,18 +352,25 @@ export function ChatScreen() {
                         >
                             ☰
                         </button>
-                        <span className={`status-dot ${statusDot}`} aria-hidden="true" />
-                        <span className="status-label">{statusLabel}</span>
-                        {activeSession && (
-                            <span className="chat-session-label">
-                                · {activeSession.tool}
-                                {activeSession.model ? ` (${activeSession.model})` : ''}
-                            </span>
-                        )}
-                        {status === 'error' && sessionClient.getLastError() && (
-                            <span className="status-error-hint">{sessionClient.getLastError()}</span>
+                    </div>
+
+                    <div className="chat-header-center">
+                        {activeSession ? (
+                            <>
+                                <div className="chat-header-name">
+                                    {activeSession.tool === 'claude' ? 'Claude' : 'Gemini'}
+                                    {activeSession.model ? ` · ${activeSession.model}` : ''}
+                                </div>
+                                <div className="chat-header-sub">
+                                    <span className={`status-dot ${statusDot}`} aria-hidden="true" />
+                                    <span>{statusLabel}</span>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="chat-header-name">Cowork</div>
                         )}
                     </div>
+
                     <div className="chat-header-actions">
                         {status === 'connected' && (
                             <button
@@ -414,34 +380,28 @@ export function ChatScreen() {
                                 aria-label="查看日志"
                                 title="查看日志"
                             >
-                                📋
+                                <ScrollText size={20} />
                             </button>
                         )}
                         <button
                             type="button"
                             className="icon-btn"
-                            onClick={handleBackToHome}
-                            aria-label="返回首页"
-                            title="返回首页"
+                            aria-label="更多操作"
+                            title="更多操作"
                         >
-                            ⌂
-                        </button>
-                        <button
-                            type="button"
-                            className="icon-btn icon-btn-danger"
-                            onClick={() => setConfirmDisconnect(true)}
-                            aria-label="断开并清除凭据"
-                            title="断开并清除"
-                        >
-                            ✕
+                            <EllipsisVertical size={20} />
                         </button>
                     </div>
                 </div>
 
-                <div className="chat-messages">
+                <div
+                    className="chat-messages"
+                    ref={messagesRef}
+                    onScroll={handleScroll}
+                >
                     {items.length === 0 && !thinking && (
                         <div className="chat-empty">
-                            {status === 'connected' ? 'How can I help you today?' : 'Waiting for connection…'}
+                            {status === 'connected' ? '今天想聊什么？' : '等待连接…'}
                         </div>
                     )}
                     {items.map(item => <MessageItem key={item.id} item={item} />)}
@@ -449,28 +409,50 @@ export function ChatScreen() {
                     <div ref={bottomRef} />
                 </div>
 
+                {/* Scroll-to-bottom FAB */}
+                <button
+                    type="button"
+                    className={`chat-fab${showScrollBtn ? '' : ' hidden'}`}
+                    onClick={() => {
+                        setShowScrollBtn(false);
+                        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    aria-label="滚动到底部"
+                >
+                    <ChevronDown size={20} />
+                </button>
+
+                {/* Input bar */}
                 <div className="chat-input-bar">
+                    <button
+                        type="button"
+                        className="icon-btn chat-input-extra"
+                        aria-label="附件"
+                        disabled={status !== 'connected' || thinking}
+                    >
+                        <Plus size={22} />
+                    </button>
                     <div className="chat-input-wrap">
                         <textarea
                             ref={inputRef}
                             className="chat-textarea"
                             value={input}
-                            onChange={e => setInput(e.target.value)}
+                            onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
-                            placeholder="Message… (Enter to send, Shift+Enter for newline)"
+                            placeholder={placeholder}
                             rows={1}
                             disabled={status !== 'connected' || thinking || !sessionId}
                         />
-                        <button
-                            type="button"
-                            className="chat-send-btn"
-                            onClick={handleSend}
-                            disabled={!input.trim() || status !== 'connected' || thinking || !sessionId}
-                            aria-label="发送消息"
-                        >
-                            ↑
-                        </button>
                     </div>
+                    <button
+                        type="button"
+                        className={`chat-send-btn${input.trim() ? ' active' : ''}`}
+                        onClick={handleSend}
+                        disabled={!input.trim() || status !== 'connected' || thinking || !sessionId}
+                        aria-label="发送消息"
+                    >
+                        <SendHorizontal size={18} />
+                    </button>
                 </div>
             </div>
         </div>
