@@ -11,6 +11,12 @@ export interface RunClaudeOptions {
     onEvent: (event: unknown) => void;
     onSessionId: (id: string) => void;
     abort: AbortSignal;
+    /**
+     * Working directory for the spawned `claude` process. Defaults to
+     * `process.cwd()`; SessionManager passes the session-specific cwd here
+     * so per-session work dirs actually affect what Claude sees.
+     */
+    cwd?: string;
     /** Override the `claude` binary name/path. Defaults to `'claude'`. Intended for tests. */
     command?: string;
     /** Extra env merged onto `process.env` when spawning. Intended for tests. */
@@ -22,7 +28,18 @@ export interface RunClaudeOptions {
  * and stream the resulting JSON events to onEvent line-by-line.
  */
 export async function runClaudeProcess(opts: RunClaudeOptions): Promise<number> {
-    const { prompt, resumeSessionId, model, agentArgs, onEvent, onSessionId, abort, command, extraEnv } = opts;
+    const {
+        prompt,
+        resumeSessionId,
+        model,
+        agentArgs,
+        onEvent,
+        onSessionId,
+        abort,
+        cwd,
+        command,
+        extraEnv,
+    } = opts;
 
     const cliArgs: string[] = [
         '--print',
@@ -49,7 +66,7 @@ export async function runClaudeProcess(opts: RunClaudeOptions): Promise<number> 
 
         const child = spawn(bin, cliArgs, {
             stdio: ['ignore', 'pipe', 'inherit'],
-            cwd: process.cwd(),
+            cwd: cwd ?? process.cwd(),
             signal: abort,
             env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
         });

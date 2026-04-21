@@ -157,6 +157,7 @@ export class GeminiAcpSession {
     private readonly model: string | undefined;
     private readonly command: string;
     private readonly extraEnv: Record<string, string> | undefined;
+    private readonly cwd: string;
 
     constructor(opts: {
         broadcast: BroadcastFn;
@@ -168,6 +169,13 @@ export class GeminiAcpSession {
         onSessionId?: (id: string) => void;
         resumeSessionId?: string;
         model?: string;
+        /**
+         * Working directory for the spawned Gemini CLI, and the cwd reported
+         * to the ACP `session/new` / `session/load` RPCs. Defaults to
+         * `process.cwd()`; SessionManager passes the session-specific cwd so
+         * Gemini's file tools resolve paths against the right root.
+         */
+        cwd?: string;
         /** Override the `gemini` binary name/path. Defaults to `'gemini'`. Intended for tests. */
         command?: string;
         /** Extra env merged onto `process.env` when spawning. Intended for tests. */
@@ -181,6 +189,7 @@ export class GeminiAcpSession {
         this.model = opts.model;
         this.command = opts.command ?? 'gemini';
         this.extraEnv = opts.extraEnv;
+        this.cwd = opts.cwd ?? process.cwd();
     }
 
     async sendPrompt(text: string): Promise<void> {
@@ -227,7 +236,7 @@ export class GeminiAcpSession {
         logger.debug('[gemini] spawning', this.command, spawnArgs.join(' '));
 
         const proc = spawn(this.command, spawnArgs, {
-            cwd: process.cwd(),
+            cwd: this.cwd,
             env,
             stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -280,7 +289,7 @@ export class GeminiAcpSession {
             try {
                 const loadRes = await this.rpc('session/load', {
                     sessionId: this.resumeSessionId,
-                    cwd: process.cwd(),
+                    cwd: this.cwd,
                     mcpServers: [],
                 });
                 const loadedId = (loadRes.result as Record<string, unknown> | undefined)
@@ -300,7 +309,7 @@ export class GeminiAcpSession {
         }
 
         const sessionRes = await this.rpc('session/new', {
-            cwd: process.cwd(),
+            cwd: this.cwd,
             mcpServers: [],
         });
         const sessionId = (sessionRes.result as Record<string, unknown> | undefined)?.sessionId;

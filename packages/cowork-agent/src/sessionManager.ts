@@ -196,6 +196,7 @@ export class SessionManager {
                 apiKey: this.opts.geminiApiKey,
                 model: p.model,
                 resumeSessionId: p.geminiSessionId ?? undefined,
+                cwd: entry.cwd,
                 command: this.opts.geminiCommand,
                 extraEnv: this.opts.geminiExtraEnv,
                 onSessionId: (acpId) => {
@@ -274,6 +275,7 @@ export class SessionManager {
                 resumeSessionId: entry.claudeSessionId,
                 model: entry.model,
                 agentArgs: entry.agentArgs,
+                cwd: entry.cwd,
                 onEvent: (e) => this.appendAndBroadcast(sessionId, e),
                 onSessionId: (cid) => {
                     // Persist on first observation only — Claude re-emits the
