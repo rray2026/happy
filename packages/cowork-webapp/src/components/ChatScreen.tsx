@@ -87,6 +87,10 @@ export function ChatScreen() {
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const logsBottomRef = useRef<HTMLDivElement>(null);
+    // StrictMode double-mounts the effect in dev; guard so we only replay once —
+    // otherwise the server sends the full history twice and every past message
+    // gets appended a second time at the bottom of the chat.
+    const replayedRef = useRef(false);
 
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
@@ -102,7 +106,8 @@ export function ChatScreen() {
             setItems(prev => mergeItems(prev, newItems));
         });
 
-        if (sessionClient.getStatus() === 'connected') {
+        if (!replayedRef.current && sessionClient.getStatus() === 'connected') {
+            replayedRef.current = true;
             sessionClient.rpc(uid(), 'replay', { fromSeq: -1 }).catch(() => {});
         }
 
