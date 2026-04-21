@@ -100,6 +100,8 @@ export class GeminiAcpSession {
     private readonly onPermissionRequest: PermissionRequestFn | undefined;
     private readonly resumeSessionId: string | undefined;
     private readonly model: string | undefined;
+    private readonly command: string;
+    private readonly extraEnv: Record<string, string> | undefined;
 
     constructor(opts: {
         broadcast: BroadcastFn;
@@ -107,12 +109,18 @@ export class GeminiAcpSession {
         onPermissionRequest?: PermissionRequestFn;
         resumeSessionId?: string;
         model?: string;
+        /** Override the `gemini` binary name/path. Defaults to `'gemini'`. Intended for tests. */
+        command?: string;
+        /** Extra env merged onto `process.env` when spawning. Intended for tests. */
+        extraEnv?: Record<string, string>;
     }) {
         this.broadcast = opts.broadcast;
         this.apiKey = opts.apiKey;
         this.onPermissionRequest = opts.onPermissionRequest;
         this.resumeSessionId = opts.resumeSessionId;
         this.model = opts.model;
+        this.command = opts.command ?? 'gemini';
+        this.extraEnv = opts.extraEnv;
     }
 
     async sendPrompt(text: string): Promise<void> {
@@ -149,11 +157,14 @@ export class GeminiAcpSession {
             env.GEMINI_API_KEY = this.apiKey;
             env.GOOGLE_API_KEY = this.apiKey;
         }
+        if (this.extraEnv) {
+            Object.assign(env, this.extraEnv);
+        }
 
         const spawnArgs = ['--experimental-acp', ...(this.model ? ['-m', this.model] : [])];
-        logger.debug('[gemini] spawning', spawnArgs.join(' '));
+        logger.debug('[gemini] spawning', this.command, spawnArgs.join(' '));
 
-        const proc = spawn('gemini', spawnArgs, {
+        const proc = spawn(this.command, spawnArgs, {
             cwd: process.cwd(),
             env,
             stdio: ['pipe', 'pipe', 'pipe'],

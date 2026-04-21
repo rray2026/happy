@@ -11,6 +11,10 @@ export interface RunClaudeOptions {
     onEvent: (event: unknown) => void;
     onSessionId: (id: string) => void;
     abort: AbortSignal;
+    /** Override the `claude` binary name/path. Defaults to `'claude'`. Intended for tests. */
+    command?: string;
+    /** Extra env merged onto `process.env` when spawning. Intended for tests. */
+    extraEnv?: Record<string, string>;
 }
 
 /**
@@ -18,7 +22,7 @@ export interface RunClaudeOptions {
  * and stream the resulting JSON events to onEvent line-by-line.
  */
 export async function runClaudeProcess(opts: RunClaudeOptions): Promise<number> {
-    const { prompt, resumeSessionId, model, agentArgs, onEvent, onSessionId, abort } = opts;
+    const { prompt, resumeSessionId, model, agentArgs, onEvent, onSessionId, abort, command, extraEnv } = opts;
 
     const cliArgs: string[] = [
         '--print',
@@ -31,7 +35,8 @@ export async function runClaudeProcess(opts: RunClaudeOptions): Promise<number> 
     if (resumeSessionId) cliArgs.push('--resume', resumeSessionId);
     cliArgs.push(...agentArgs, prompt);
 
-    logger.debug('[claude] spawning:', JSON.stringify(cliArgs));
+    const bin = command ?? 'claude';
+    logger.debug('[claude] spawning:', bin, JSON.stringify(cliArgs));
 
     return new Promise<number>((resolve) => {
         let settled = false;
@@ -42,10 +47,11 @@ export async function runClaudeProcess(opts: RunClaudeOptions): Promise<number> 
             }
         };
 
-        const child = spawn('claude', cliArgs, {
+        const child = spawn(bin, cliArgs, {
             stdio: ['ignore', 'pipe', 'inherit'],
             cwd: process.cwd(),
             signal: abort,
+            env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
         });
 
         const rl = createInterface({ input: child.stdout! });
