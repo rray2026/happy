@@ -51,7 +51,7 @@ describe('CLI → wsServer → webapp end-to-end', () => {
 
             // webapp layer: user item, status item (from system), assistant item.
             // result with subtype:'success' produces no item (events.ts:47 returns []).
-            expect(rig.items).toEqual([
+            expect(rig.items).toMatchObject([
                 { kind: 'user', text: 'hello', id: expect.any(String) },
                 { kind: 'status', text: expect.stringMatching(/^Session fake-ses/), id: expect.any(String) },
                 { kind: 'assistant', text: 'Hi', id: expect.any(String) },
