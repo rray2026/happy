@@ -19,6 +19,14 @@
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --radius: 12px;
   --radius-sm: 8px;
+
+  /* Responsive layout tokens */
+  --chat-max-w: 760px;           /* desktop reading width for chat body */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --hit-target: 44px;            /* min touch target per HIG */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -28,29 +36,47 @@
     --card: #2c2c2e;
     --border: #3a3a3c;
     --text: #f2f2f7;
-    --text-secondary: #636366;
+    --text-secondary: #8e8e93;
     --code-bg: #2c2c2e;
   }
 }
 
 html, body, #root {
   margin: 0; padding: 0;
-  height: 100%;
+  min-height: 100%;
   font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
+
+body { overscroll-behavior-y: none; }
+
+/* Accessibility: visible keyboard focus for power users */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:focus:not(:focus-visible) { outline: none; }
+
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 
 /* ── Connect screen ── */
 
 .connect-screen {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 40px 24px;
+  padding:
+    calc(40px + var(--safe-top))
+    calc(24px + var(--safe-right))
+    calc(40px + var(--safe-bottom))
+    calc(24px + var(--safe-left));
   background: var(--bg);
   overflow-y: auto;
 }
@@ -65,6 +91,22 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+@media (max-width: 480px) {
+  .connect-screen {
+    padding:
+      calc(20px + var(--safe-top))
+      calc(14px + var(--safe-right))
+      calc(20px + var(--safe-bottom))
+      calc(14px + var(--safe-left));
+  }
+  .connect-card {
+    padding: 24px 20px;
+    border-radius: 16px;
+  }
+  .connect-title { font-size: 24px; }
+  .connect-logo  { font-size: 32px; }
 }
 
 .connect-logo {
@@ -100,7 +142,8 @@ html, body, #root {
 .connect-textarea {
   width: 100%;
   font-family: var(--mono);
-  font-size: 12px;
+  /* 16px prevents iOS Safari auto-zoom on focus */
+  font-size: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -111,6 +154,10 @@ html, body, #root {
   transition: border-color 0.15s;
   line-height: 1.5;
   box-sizing: border-box;
+}
+@media (min-width: 481px) {
+  /* On desktop we can safely use a smaller mono font */
+  .connect-textarea { font-size: 12px; }
 }
 
 .connect-textarea:focus {
@@ -150,6 +197,9 @@ html, body, #root {
 
 .chat-screen {
   height: 100vh;
+  /* dvh tracks the visible viewport when the iOS URL bar / keyboard
+     collapses or expands; falls back to 100vh on older browsers. */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -162,11 +212,18 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding:
+    calc(10px + var(--safe-top))
+    calc(16px + var(--safe-right))
+    10px
+    calc(16px + var(--safe-left));
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
   gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
 }
 
 .chat-status {
@@ -175,6 +232,18 @@ html, body, #root {
   gap: 8px;
   flex: 1;
   min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .chat-header {
+    padding-left: calc(24px + var(--safe-left));
+    padding-right: calc(24px + var(--safe-right));
+  }
+}
+
+/* Narrow phones: hide the long error hint text — keep only the red dot */
+@media (max-width: 380px) {
+  .status-error-hint { display: none; }
 }
 
 .status-dot {
@@ -212,13 +281,19 @@ html, body, #root {
   background: none;
   border: none;
   cursor: pointer;
+  min-width: var(--hit-target);
+  min-height: var(--hit-target);
   padding: 6px 8px;
   border-radius: var(--radius-sm);
-  font-size: 16px;
+  font-size: 18px;
   color: var(--text-secondary);
-  transition: background 0.1s;
+  transition: background 0.1s, color 0.1s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .icon-btn:hover { background: var(--border); }
+.icon-btn:active { background: color-mix(in srgb, var(--border) 70%, var(--text-secondary)); }
 .disconnect-btn { color: var(--error); }
 
 /* Messages */
@@ -226,11 +301,25 @@ html, body, #root {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 16px 8px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding:
+    20px
+    calc(16px + var(--safe-right))
+    8px
+    calc(16px + var(--safe-left));
   display: flex;
   flex-direction: column;
   gap: 16px;
   scroll-behavior: smooth;
+  /* Center chat column on wide screens for readability */
+  width: 100%;
+  max-width: var(--chat-max-w);
+  margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+  .chat-messages { padding-left: 24px; padding-right: 24px; }
 }
 
 .chat-empty {
@@ -251,7 +340,7 @@ html, body, #root {
   color: var(--user-text);
   border-radius: 20px 20px 4px 20px;
   padding: 10px 16px;
-  max-width: 75%;
+  max-width: min(75%, 560px);
   font-size: 15px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -371,7 +460,11 @@ html, body, #root {
 /* Input */
 
 .chat-input-bar {
-  padding: 10px 12px 16px;
+  padding:
+    10px
+    calc(12px + var(--safe-right))
+    calc(12px + var(--safe-bottom))
+    calc(12px + var(--safe-left));
   border-top: 1px solid var(--border);
   background: var(--bg);
   flex-shrink: 0;
@@ -386,6 +479,14 @@ html, body, #root {
   padding: 8px 8px 8px 16px;
   gap: 8px;
   transition: border-color 0.15s;
+  /* Match chat column width on wide screens */
+  width: 100%;
+  max-width: var(--chat-max-w);
+  margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+  .chat-input-bar { padding-left: 24px; padding-right: 24px; }
 }
 
 .chat-input-wrap:focus-within {
@@ -398,7 +499,8 @@ html, body, #root {
   border: none;
   outline: none;
   font-family: var(--sans);
-  font-size: 15px;
+  /* 16px prevents iOS Safari auto-zoom on focus */
+  font-size: 16px;
   color: var(--text);
   resize: none;
   max-height: 140px;
@@ -412,7 +514,7 @@ html, body, #root {
 .chat-textarea:disabled { opacity: 0.5; }
 
 .chat-send-btn {
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   border-radius: 50%;
   border: none;
   background: var(--accent);
@@ -421,9 +523,10 @@ html, body, #root {
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, transform 0.1s;
   line-height: 1;
 }
+.chat-send-btn:active:not(:disabled) { transform: scale(0.94); }
 .chat-send-btn:hover:not(:disabled) { opacity: 0.85; }
 .chat-send-btn:disabled { opacity: 0.35; cursor: default; }
 
@@ -477,7 +580,11 @@ html, body, #root {
   background: rgba(0,0,0,0.5);
   display: flex; align-items: center; justify-content: center;
   z-index: 100;
-  padding: 20px;
+  padding:
+    calc(20px + var(--safe-top))
+    calc(20px + var(--safe-right))
+    calc(20px + var(--safe-bottom))
+    calc(20px + var(--safe-left));
 }
 
 .modal-card {
@@ -535,11 +642,17 @@ html, body, #root {
   background: #0d0d0d;
   display: flex; flex-direction: column;
   z-index: 100;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
 }
 
 .logs-header {
   display: flex; align-items: flex-start;
-  padding: 20px 20px 16px;
+  padding:
+    16px
+    calc(20px + var(--safe-right))
+    16px
+    calc(20px + var(--safe-left));
   border-bottom: 1px solid #2c2c2e;
   gap: 12px;
 }
@@ -556,7 +669,12 @@ html, body, #root {
 
 .logs-body {
   flex: 1; overflow-y: auto;
-  padding: 12px 16px;
+  -webkit-overflow-scrolling: touch;
+  padding:
+    12px
+    calc(16px + var(--safe-right))
+    12px
+    calc(16px + var(--safe-left));
   display: flex; flex-direction: column; gap: 2px;
 }
 
@@ -685,7 +803,7 @@ html, body, #root {
 .transfer-textarea {
   width: 100%;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -696,6 +814,9 @@ html, body, #root {
   outline: none;
   transition: border-color 0.15s;
   line-height: 1.5;
+}
+@media (min-width: 481px) {
+  .transfer-textarea { font-size: 12px; }
 }
 .transfer-textarea:focus { border-color: var(--accent); }
 
