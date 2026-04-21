@@ -124,10 +124,13 @@ export function ChatScreen() {
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
 
+    const [chromeVisible, setChromeVisible] = useState(true);
+
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const logsBottomRef = useRef<HTMLDivElement>(null);
     const messagesRef = useRef<HTMLDivElement>(null);
+    const lastScrollTopRef = useRef(0);
     // Keyed by sessionId via the parent route wrapper — seenSeqs initialises fresh
     // on every mount, so no reset effect is needed.
     const seenSeqs = useRef<Set<number>>(new Set());
@@ -195,7 +198,19 @@ export function ChatScreen() {
     const handleScroll = useCallback(() => {
         const el = messagesRef.current;
         if (!el) return;
-        setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+        const scrollTop = el.scrollTop;
+        const atBottom = el.scrollHeight - scrollTop - el.clientHeight < 120;
+        const delta = scrollTop - lastScrollTopRef.current;
+        lastScrollTopRef.current = scrollTop;
+
+        setShowScrollBtn(!atBottom);
+
+        // Mobile auto-hide: hide chrome while reading history (scroll up),
+        // restore when scrolling back toward newest messages or reaching bottom.
+        if (isTouchDevice) {
+            if (atBottom || delta > 5) setChromeVisible(true);
+            else if (delta < -5) setChromeVisible(false);
+        }
     }, []);
 
     const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
@@ -276,7 +291,7 @@ export function ChatScreen() {
                 aria-hidden="true"
             />
 
-            <div className="chat-main">
+            <div className={`chat-main${chromeVisible ? '' : ' chrome-hidden'}`}>
                 {/* Permission request */}
                 <Modal
                     open={!!permission}
@@ -398,6 +413,7 @@ export function ChatScreen() {
                     className="chat-messages"
                     ref={messagesRef}
                     onScroll={handleScroll}
+                    onClick={() => { if (!chromeVisible) setChromeVisible(true); }}
                 >
                     {items.length === 0 && !thinking && (
                         <div className="chat-empty">
@@ -439,6 +455,7 @@ export function ChatScreen() {
                             value={input}
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
+                            onFocus={() => setChromeVisible(true)}
                             placeholder={placeholder}
                             rows={1}
                             disabled={status !== 'connected' || thinking || !sessionId}
