@@ -34,7 +34,16 @@ export interface ToolUsePart { type: 'tool_use'; id: string; name: string; input
 export interface ToolResultPart { type: 'tool_result'; tool_use_id: string; content: string | unknown[]; }
 export type ContentPart = TextPart | ToolUsePart | ToolResultPart;
 
-export interface AssistantEvent { type: 'assistant'; message: { role: 'assistant'; content: ContentPart[] }; }
+export interface AssistantEvent {
+    type: 'assistant';
+    message?: { role: 'assistant'; content: ContentPart[] };
+    /** Progressive delta marker: text in `message` is an increment, not the full message. */
+    _delta?: boolean;
+    /** End-of-stream marker. When true, `message` is usually absent. */
+    _final?: boolean;
+    /** Stable id grouping delta + final events into one stream. */
+    _streamId?: string;
+}
 export interface UserEvent { type: 'user'; message: { role: 'user'; content: string | ContentPart[] }; }
 export interface ResultEvent { type: 'result'; subtype: 'success' | 'error'; result: string; }
 export interface SystemEvent { type: 'system'; subtype: string; session_id?: string; }
@@ -58,7 +67,7 @@ export interface ToolCall {
 
 export type Item =
     | { kind: 'user'; text: string; id: string }
-    | { kind: 'assistant'; text: string; id: string }
+    | { kind: 'assistant'; text: string; id: string; streaming?: boolean }
     | { kind: 'tools'; calls: ToolCall[]; id: string }
     | { kind: 'result'; text: string; success: boolean; id: string }
     | { kind: 'status'; text: string; id: string };

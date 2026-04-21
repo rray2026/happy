@@ -188,12 +188,12 @@ describe('CLI → wsServer → webapp end-to-end', () => {
 
     // ── Gemini path ────────────────────────────────────────────────────────────
 
-    describe('gemini (current buffered behavior — Phase 2 will flip these)', () => {
+    describe('gemini (progressive streaming)', () => {
         beforeEach(() => {
             // vitest quirk: beforeEach per describe
         });
 
-        it('baseline: chunks are buffered and flushed as ONE assistant event at prompt end', async () => {
+        it('chunks emit as progressive delta events keyed by a single streamId; final marker closes the stream', async () => {
             rig = await startCliRig({
                 agent: 'gemini',
                 cliScript: {
@@ -209,19 +209,41 @@ describe('CLI → wsServer → webapp end-to-end', () => {
             rig.sendInput('stream?');
             await waitForEvent(rig, (p) => (p as { type?: string })?.type === 'result');
 
-            const assistants = rig.events.filter((e) => (e.payload as { type: string }).type === 'assistant');
-            expect(assistants).toHaveLength(1); // Phase 2 will make this >1 (delta events)
-            const content = (assistants[0].payload as {
-                message: { content: Array<{ type: string; text: string }> };
-            }).message.content;
-            expect(content[0].text).toBe('Hello world');
+            type AsstEv = {
+                type: 'assistant';
+                message?: { content: Array<{ type: string; text: string }> };
+                _delta?: boolean;
+                _final?: boolean;
+                _streamId?: string;
+            };
+            const assistants = rig.events
+                .map((e) => e.payload as AsstEv)
+                .filter((p) => p.type === 'assistant');
 
+            const deltas = assistants.filter((a) => a._delta === true);
+            const finals = assistants.filter((a) => a._final === true);
+            expect(deltas).toHaveLength(3);
+            expect(finals).toHaveLength(1);
+
+            // All delta+final events share a single streamId.
+            const ids = new Set(assistants.map((a) => a._streamId));
+            expect(ids.size).toBe(1);
+
+            // Each delta carries only its own chunk text (no cumulative re-send).
+            expect(deltas.map((d) => d.message!.content[0].text)).toEqual(['Hel', 'lo', ' world']);
+            // Final event carries no text.
+            expect(finals[0].message).toBeUndefined();
+
+            // webapp layer: the three deltas merge into a single assistant item,
+            // and the final marker flips streaming=false.
             const assistantItems = rig.items.filter((i) => i.kind === 'assistant');
             expect(assistantItems).toHaveLength(1);
-            expect((assistantItems[0] as { text: string }).text).toBe('Hello world');
+            const item = assistantItems[0] as { text: string; streaming?: boolean };
+            expect(item.text).toBe('Hello world');
+            expect(item.streaming).toBe(false);
         });
 
-        it('tool_call flushes buffered chunks before tool, then resumes into a second assistant event', async () => {
+        it('tool_call finalizes the current stream before the tool event; a new stream starts afterwards', async () => {
             rig = await startCliRig({
                 agent: 'gemini',
                 cliScript: {
@@ -238,14 +260,58 @@ describe('CLI → wsServer → webapp end-to-end', () => {
             rig.sendInput('stream + tool');
             await waitForEvent(rig, (p) => (p as { type?: string })?.type === 'result');
 
-            const types = rig.events.map((e) => (e.payload as { type: string }).type);
-            const userIdx = types.indexOf('user');
-            const toolIdx = types.indexOf('assistant', userIdx + 1);
-            // NB: tool_use is inside an assistant event (updateToEvent wraps it).
-            expect(types.filter((t) => t === 'assistant').length).toBeGreaterThanOrEqual(3);
-            // First assistant (flushed "before") precedes the tool_call assistant;
-            // last assistant ("after") comes from the prompt-end flush.
-            expect(toolIdx).toBeGreaterThan(userIdx);
+            type AsstEv = {
+                type: 'assistant';
+                message?: { content: Array<{ type: string; text?: string; name?: string }> };
+                _delta?: boolean;
+                _final?: boolean;
+                _streamId?: string;
+            };
+            const assistants = rig.events
+                .map((e) => e.payload as AsstEv)
+                .filter((p) => p.type === 'assistant');
+
+            // Layout: delta(be) delta(fore) final(streamA) tool_use(t1) delta(after) final(streamB)
+            const deltas = assistants.filter((a) => a._delta === true);
+            const finals = assistants.filter((a) => a._final === true);
+            const toolUses = assistants.filter(
+                (a) => !a._delta && !a._final && a.message?.content?.[0]?.type === 'tool_use',
+            );
+
+            expect(deltas).toHaveLength(3);
+            expect(finals).toHaveLength(2);
+            expect(toolUses).toHaveLength(1);
+
+            // Two distinct streamIds — one before the tool, one after.
+            const streamIds = new Set(
+                [...deltas, ...finals].map((a) => a._streamId).filter(Boolean),
+            );
+            expect(streamIds.size).toBe(2);
+
+            // Ordering: first final must come BEFORE tool_use in the event stream.
+            const streamABefore = rig.events.findIndex(
+                (e) => (e.payload as AsstEv)._final === true,
+            );
+            const toolIdx = rig.events.findIndex(
+                (e) =>
+                    (e.payload as AsstEv).type === 'assistant' &&
+                    (e.payload as AsstEv).message?.content?.[0]?.type === 'tool_use',
+            );
+            expect(streamABefore).toBeLessThan(toolIdx);
+
+            // webapp layer: two assistant items + one tools item between them.
+            const kinds = rig.items.map((i) => i.kind);
+            const firstAsst = kinds.indexOf('assistant');
+            const toolsKindIdx = kinds.indexOf('tools');
+            const lastAsst = kinds.lastIndexOf('assistant');
+            expect(firstAsst).toBeLessThan(toolsKindIdx);
+            expect(toolsKindIdx).toBeLessThan(lastAsst);
+            const firstItem = rig.items[firstAsst] as { text: string; streaming?: boolean };
+            const lastItem = rig.items[lastAsst] as { text: string; streaming?: boolean };
+            expect(firstItem.text).toBe('before');
+            expect(firstItem.streaming).toBe(false);
+            expect(lastItem.text).toBe('after');
+            expect(lastItem.streaming).toBe(false);
         });
 
         it('agent_thought_chunk broadcasts a thinking event directly (no buffering)', async () => {

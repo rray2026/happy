@@ -33,10 +33,22 @@ export function eventToItems(event: ClaudeEvent): Item[] {
         }
         case 'assistant': {
             const e = event as AssistantEvent;
+            // Finalize marker for a progressive stream — carries no text.
+            if (e._final && e._streamId) {
+                return [{ kind: 'assistant', text: '', id: e._streamId, streaming: false }];
+            }
+            // Progressive delta chunk — keyed on streamId so mergeItems can append.
+            if (e._delta && e._streamId && e.message) {
+                const text = e.message.content.filter((p): p is TextPart => p.type === 'text').map(p => p.text).join('');
+                if (!text) return [];
+                return [{ kind: 'assistant', text, id: e._streamId, streaming: true }];
+            }
+            // Non-streaming path (Claude, or tool-only assistant events from Gemini).
             const items: Item[] = [];
-            const text = e.message.content.filter((p): p is TextPart => p.type === 'text').map(p => p.text).join('');
+            const content = e.message?.content ?? [];
+            const text = content.filter((p): p is TextPart => p.type === 'text').map(p => p.text).join('');
             if (text) items.push({ kind: 'assistant', text, id: uid() });
-            const calls = e.message.content
+            const calls = content
                 .filter((p): p is ToolUsePart => p.type === 'tool_use')
                 .map((p) => ({ name: p.name, input: p.input, toolUseId: p.id }));
             if (calls.length) items.push({ kind: 'tools', calls, id: uid() });
@@ -69,6 +81,26 @@ export function mergeItems(prev: Item[], incoming: Item[]): Item[] {
                 continue;
             }
         }
+        // Progressive assistant streaming: append text into the existing same-id item.
+        if (item.kind === 'assistant' && item.streaming) {
+            const idx = findLastIndex(merged, (m) => m.kind === 'assistant' && m.id === item.id);
+            if (idx >= 0) {
+                const prevItem = merged[idx] as Extract<Item, { kind: 'assistant' }>;
+                merged[idx] = { ...prevItem, text: prevItem.text + item.text, streaming: true };
+                continue;
+            }
+        }
+        // Finalize marker: flip streaming off on the existing same-id item; drop marker.
+        if (item.kind === 'assistant' && item.streaming === false && item.text === '') {
+            const idx = findLastIndex(merged, (m) => m.kind === 'assistant' && m.id === item.id);
+            if (idx >= 0) {
+                const prevItem = merged[idx] as Extract<Item, { kind: 'assistant' }>;
+                merged[idx] = { ...prevItem, streaming: false };
+                continue;
+            }
+            // No matching stream — drop the bare finalize (nothing to render).
+            continue;
+        }
         if (item.kind === 'user') {
             const last = merged[merged.length - 1];
             if (last?.kind === 'user' && last.text === item.text) continue;
@@ -76,4 +108,9 @@ export function mergeItems(prev: Item[], incoming: Item[]): Item[] {
         merged.push(item);
     }
     return merged;
+}
+
+function findLastIndex<T>(arr: T[], pred: (v: T) => boolean): number {
+    for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i])) return i;
+    return -1;
 }
