@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bot } from 'lucide-react';
+import { Plus, Bot, Pencil } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { NewSessionModal } from './NewSessionModal';
+import { loadNames, saveName } from '../session/nameStore';
 
 function formatTime(ms: number): string {
     const now = Date.now();
@@ -18,6 +19,10 @@ function formatTime(ms: number): string {
     return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }
 
+function defaultName(s: ChatSessionMeta): string {
+    return (s.tool === 'claude' ? 'Claude' : 'Gemini') + (s.model ? ` · ${s.model}` : '');
+}
+
 function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
     return (
         <div className={`session-row-avatar avatar-${tool}`}>
@@ -30,12 +35,38 @@ export function SessionListPage() {
     const navigate = useNavigate();
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
     const [newSessionOpen, setNewSessionOpen] = useState(false);
+    const [names, setNames] = useState<Record<string, string>>(loadNames);
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editingValue, setEditingValue] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => sessionClient.onSessionsChange(setSessions), []);
+
+    useEffect(() => {
+        if (editingId) inputRef.current?.focus();
+    }, [editingId]);
 
     const handleSessionCreated = useCallback((s: ChatSessionMeta) => {
         navigate(`/sessions/${s.id}`);
     }, [navigate]);
+
+    const startEdit = useCallback((s: ChatSessionMeta, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setEditingId(s.id);
+        setEditingValue(names[s.id] ?? defaultName(s));
+    }, [names]);
+
+    const commitEdit = useCallback(() => {
+        if (!editingId) return;
+        saveName(editingId, editingValue);
+        setNames(loadNames());
+        setEditingId(null);
+    }, [editingId, editingValue]);
+
+    const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
+        if (e.key === 'Escape') { setEditingId(null); }
+    }, [commitEdit]);
 
     return (
         <div className="session-list-page tab-page">
@@ -59,26 +90,51 @@ export function SessionListPage() {
                         <p className="session-list-empty-sub">点击右上角 + 新建会话</p>
                     </div>
                 ) : (
-                    sessions.map((s) => (
-                        <button
-                            key={s.id}
-                            type="button"
-                            className="session-row"
-                            onClick={() => navigate(`/sessions/${s.id}`)}
-                        >
-                            <SessionAvatar tool={s.tool} />
-                            <div className="session-row-content">
-                                <div className="session-row-title-row">
-                                    <span className="session-row-name">
-                                        {s.tool === 'claude' ? 'Claude' : 'Gemini'}
-                                        {s.model ? ` · ${s.model}` : ''}
-                                    </span>
-                                    <span className="session-row-time">{formatTime(s.createdAt)}</span>
+                    sessions.map((s) => {
+                        const isEditing = editingId === s.id;
+                        const displayName = names[s.id] ?? defaultName(s);
+                        return (
+                            <div
+                                key={s.id}
+                                className={`session-row${isEditing ? ' session-row-editing' : ''}`}
+                                onClick={() => !isEditing && navigate(`/sessions/${s.id}`)}
+                            >
+                                <SessionAvatar tool={s.tool} />
+                                <div className="session-row-content">
+                                    <div className="session-row-title-row">
+                                        {isEditing ? (
+                                            <input
+                                                ref={inputRef}
+                                                className="session-row-name-input"
+                                                value={editingValue}
+                                                onChange={e => setEditingValue(e.target.value)}
+                                                onKeyDown={handleEditKeyDown}
+                                                onBlur={commitEdit}
+                                                onClick={e => e.stopPropagation()}
+                                                maxLength={40}
+                                            />
+                                        ) : (
+                                            <>
+                                                <span className="session-row-name">{displayName}</span>
+                                                <span className="session-row-time">{formatTime(s.createdAt)}</span>
+                                            </>
+                                        )}
+                                    </div>
+                                    <div className="session-row-sub">{s.cwd || s.id.slice(0, 12)}</div>
                                 </div>
-                                <div className="session-row-sub">{s.cwd || s.id.slice(0, 12)}</div>
+                                {!isEditing && (
+                                    <button
+                                        type="button"
+                                        className="session-row-edit-btn"
+                                        onClick={e => startEdit(s, e)}
+                                        aria-label="重命名"
+                                    >
+                                        <Pencil size={14} />
+                                    </button>
+                                )}
                             </div>
-                        </button>
-                    ))
+                        );
+                    })
                 )}
             </div>
 

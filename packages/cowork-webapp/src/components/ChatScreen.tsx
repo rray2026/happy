@@ -4,6 +4,7 @@ import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, Chevro
 import { sessionClient } from '../session';
 import type { ChatSessionMeta, ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
 import { eventToItems, mergeItems, uid } from '../session/events';
+import { loadNames } from '../session/nameStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
@@ -406,8 +407,9 @@ export function ChatScreen() {
                         {activeSession ? (
                             <>
                                 <div className="chat-header-name">
-                                    {activeSession.tool === 'claude' ? 'Claude' : 'Gemini'}
-                                    {activeSession.model ? ` · ${activeSession.model}` : ''}
+                                    {loadNames()[sessionId] ??
+                                        ((activeSession.tool === 'claude' ? 'Claude' : 'Gemini') +
+                                        (activeSession.model ? ` · ${activeSession.model}` : ''))}
                                 </div>
                                 <div className="chat-header-sub">
                                     <span className={`status-dot ${statusDot}`} aria-hidden="true" />

@@ -1987,6 +1987,47 @@ button:focus:not(:focus-visible) { outline: none; }
   white-space: nowrap;
 }
 
+.session-row-editing {
+  cursor: default;
+  background: var(--surface);
+}
+
+.session-row-name-input {
+  flex: 1;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  font-family: var(--sans);
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  padding: 2px var(--s-2);
+  outline: none;
+  min-width: 0;
+}
+
+.session-row-edit-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-full);
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--t-fast), background var(--t-fast);
+}
+.session-row:hover .session-row-edit-btn,
+.session-row-edit-btn:focus { opacity: 1; }
+/* Always visible on touch devices */
+@media (hover: none) {
+  .session-row-edit-btn { opacity: 0.45; }
+}
+
 /* ── Settings page ───────────────────────────────────────────────────────── */
 
 .settings-page {
