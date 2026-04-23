@@ -123,6 +123,9 @@ export function ChatScreen() {
     const [logsLoading, setLogsLoading] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
+    const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [deleting, setDeleting] = useState(false);
 
     const [chromeVisible, setChromeVisible] = useState(true);
 
@@ -267,6 +270,16 @@ export function ChatScreen() {
         }
     }, []);
 
+    const handleDeleteSession = useCallback(async () => {
+        setDeleting(true);
+        try {
+            await sessionClient.rpc(uid(), 'session.close', { sessionId });
+        } catch { /* ignore — session list will update regardless */ }
+        setDeleting(false);
+        setDeleteConfirmOpen(false);
+        navigate('/sessions');
+    }, [sessionId, navigate]);
+
     const statusDot = status === 'connected' ? 'dot-green'
         : status === 'connecting' ? 'dot-orange'
         : status === 'error' ? 'dot-red'
@@ -292,6 +305,26 @@ export function ChatScreen() {
             />
 
             <div className={`chat-main${chromeVisible ? '' : ' chrome-hidden'}`}>
+                {/* Delete confirmation */}
+                <Modal
+                    open={deleteConfirmOpen}
+                    title="删除会话"
+                    onClose={() => setDeleteConfirmOpen(false)}
+                    size="md"
+                >
+                    <div className="modal-body">
+                        <p style={{ margin: 0 }}>确定要删除这个会话吗？历史记录将一并清除，无法恢复。</p>
+                        <div className="modal-actions">
+                            <button type="button" className="btn btn-secondary" onClick={() => setDeleteConfirmOpen(false)} disabled={deleting}>
+                                取消
+                            </button>
+                            <button type="button" className="btn btn-danger" onClick={handleDeleteSession} disabled={deleting}>
+                                {deleting ? '删除中…' : '删除'}
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
+
                 {/* Permission request */}
                 <Modal
                     open={!!permission}
@@ -398,14 +431,31 @@ export function ChatScreen() {
                                 <ScrollText size={20} />
                             </button>
                         )}
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            aria-label="更多操作"
-                            title="更多操作"
-                        >
-                            <EllipsisVertical size={20} />
-                        </button>
+                        <div className="chat-header-menu-wrap">
+                            <button
+                                type="button"
+                                className="icon-btn"
+                                aria-label="更多操作"
+                                title="更多操作"
+                                onClick={() => setMenuOpen((o) => !o)}
+                            >
+                                <EllipsisVertical size={20} />
+                            </button>
+                            {menuOpen && (
+                                <>
+                                    <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
+                                    <div className="chat-menu-dropdown">
+                                        <button
+                                            type="button"
+                                            className="chat-menu-item chat-menu-item-danger"
+                                            onClick={() => { setMenuOpen(false); setDeleteConfirmOpen(true); }}
+                                        >
+                                            删除会话
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
                     </div>
                 </div>
 
