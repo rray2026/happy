@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, X } from 'lucide-react';
+import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, X, Square } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta, ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
 import { eventToItems, mergeItems, uid } from '../session/events';
@@ -218,6 +218,11 @@ export function ChatScreen() {
     }, []);
 
     const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
+    // Effective busy: server-reported authoritative state OR'd with the local
+    // optimistic flag (which bridges the ws round-trip after a fresh send).
+    // Legacy agents that don't report `busy` fall back to the local flag.
+    const isBusy = thinking || (activeSession?.busy ?? false);
+    const pendingCount = activeSession?.pending ?? 0;
 
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setInput(e.target.value);
@@ -246,6 +251,13 @@ export function ChatScreen() {
             handleSend();
         }
     }, [handleSend]);
+
+    const handleAbort = useCallback(() => {
+        if (!sessionId) return;
+        sessionClient
+            .rpc(uid(), 'session.abort', { sessionId })
+            .catch(() => {});
+    }, [sessionId]);
 
     const handlePermission = useCallback((approved: boolean) => {
         if (!permission) return;
@@ -467,13 +479,13 @@ export function ChatScreen() {
                     onScroll={handleScroll}
                     onClick={() => { if (!chromeVisible) setChromeVisible(true); }}
                 >
-                    {items.length === 0 && !thinking && (
+                    {items.length === 0 && !isBusy && (
                         <div className="chat-empty">
                             {status === 'connected' ? '今天想聊什么？' : '等待连接…'}
                         </div>
                     )}
                     {items.map(item => <MessageItem key={item.id} item={item} />)}
-                    {thinking && <TypingDots />}
+                    {isBusy && <TypingDots />}
                     <div ref={bottomRef} />
                 </div>
 
@@ -490,13 +502,20 @@ export function ChatScreen() {
                     <ChevronDown size={20} />
                 </button>
 
+                {/* Pending-queue hint (only when prompts queued behind the in-flight turn) */}
+                {pendingCount > 0 && (
+                    <div className="chat-pending-hint" aria-live="polite">
+                        {pendingCount} 条排队中
+                    </div>
+                )}
+
                 {/* Input bar */}
                 <div className="chat-input-bar">
                     <button
                         type="button"
                         className="icon-btn chat-input-extra"
                         aria-label="附件"
-                        disabled={status !== 'connected' || thinking}
+                        disabled={status !== 'connected'}
                     >
                         <Plus size={22} />
                     </button>
@@ -510,18 +529,31 @@ export function ChatScreen() {
                             onFocus={() => setChromeVisible(true)}
                             placeholder={placeholder}
                             rows={1}
-                            disabled={status !== 'connected' || thinking || !sessionId}
+                            disabled={status !== 'connected' || !sessionId}
                         />
                     </div>
-                    <button
-                        type="button"
-                        className={`chat-send-btn${input.trim() ? ' active' : ''}`}
-                        onClick={handleSend}
-                        disabled={!input.trim() || status !== 'connected' || thinking || !sessionId}
-                        aria-label="发送消息"
-                    >
-                        <SendHorizontal size={18} />
-                    </button>
+                    {isBusy ? (
+                        <button
+                            type="button"
+                            className="chat-abort-btn"
+                            onClick={handleAbort}
+                            disabled={status !== 'connected' || !sessionId}
+                            aria-label="中断"
+                            title="中断当前回合"
+                        >
+                            <Square size={14} fill="currentColor" />
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            className={`chat-send-btn${input.trim() ? ' active' : ''}`}
+                            onClick={handleSend}
+                            disabled={!input.trim() || status !== 'connected' || !sessionId}
+                            aria-label="发送消息"
+                        >
+                            <SendHorizontal size={18} />
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

@@ -15,6 +15,11 @@ export interface ChatSessionMeta {
     cwd: string;
     createdAt: number;
     currentSeq: number;
+    /** True when the agent is processing a turn. Absent on legacy agents that
+     *  predate the long-lived ClaudeChannel rollout. Treat as false when missing. */
+    busy?: boolean;
+    /** User prompts queued behind the in-flight turn. Absent on legacy agents. */
+    pending?: number;
 }
 
 export interface DirectQRPayload {
