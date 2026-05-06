@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { runClaudeProcess } from './claudeProcess.js';
+import { ClaudeChannel, runClaudeProcess } from './claudeProcess.js';
 import { isInsideRoot } from './fsBrowser.js';
 import { GeminiAcpSession } from './geminiAcp.js';
 import { logger } from './logger.js';
@@ -23,6 +23,10 @@ export interface SessionMeta {
     cwd: string;
     createdAt: number;
     currentSeq: number;
+    /** True when the agent is currently processing a turn (and not idle). */
+    busy: boolean;
+    /** Number of user prompts queued behind the in-flight turn. */
+    pending: number;
 }
 
 export interface SessionManagerOptions {
@@ -48,6 +52,13 @@ export interface SessionManagerOptions {
     claudeExtraEnv?: Record<string, string>;
     geminiCommand?: string;
     geminiExtraEnv?: Record<string, string>;
+    /**
+     * When true, claude sessions use the long-lived `ClaudeChannel` (one
+     * stream-json IO process per session) instead of spawning a fresh
+     * `claude --print PROMPT` per turn. Defaults to false during the
+     * gradual rollout — flip in serve.ts via env var `COWORK_AGENT_USE_CHANNEL`.
+     */
+    useClaudeChannel?: boolean;
 }
 
 interface SessionEntry {
@@ -60,11 +71,16 @@ interface SessionEntry {
     store: SessionStore;
     // Agent process state
     claudeSessionId: string | null;
+    /** Long-lived claude IO. Lazily spawned on first handleInput. Only used
+     *  when SessionManagerOptions.useClaudeChannel is true. */
+    claudeChannel: ClaudeChannel | null;
     /** Last-known Gemini ACP sessionId; mirrors geminiSession?.getSessionId()
      *  but survives process disposal so it can be persisted + resumed. */
     geminiSessionId: string | null;
     geminiSession: GeminiAcpSession | null;
+    /** Used by the legacy per-turn-spawn path; ignored when claudeChannel is set. */
     agentBusy: boolean;
+    /** Used by the legacy per-turn-spawn path; ignored when claudeChannel is set. */
     abort: AbortController;
     permissionPending: Map<string, (approved: boolean) => void>;
 }
@@ -183,6 +199,7 @@ export class SessionManager {
             agentArgs: p.agentArgs,
             store: new SessionStore(200),
             claudeSessionId: p.claudeSessionId,
+            claudeChannel: null,
             geminiSessionId: p.geminiSessionId,
             geminiSession: null,
             agentBusy: false,
@@ -224,7 +241,13 @@ export class SessionManager {
     close(sessionId: string): boolean {
         const entry = this.sessions.get(sessionId);
         if (!entry) return false;
-        entry.abort.abort();
+        if (entry.claudeChannel) {
+            entry.claudeChannel.close().catch((err: Error) =>
+                logger.debug(`[sessionManager] ${sessionId}: channel close failed: ${err.message}`),
+            );
+        } else {
+            entry.abort.abort();
+        }
         entry.geminiSession?.dispose();
         this.sessions.delete(sessionId);
         logger.debug(`[sessionManager] closed ${sessionId}`);
@@ -244,32 +267,53 @@ export class SessionManager {
             message: { role: 'user', content: text },
         });
 
+        // Gemini path: still per-prompt blocking (one-turn-at-a-time).
+        if (entry.tool === 'gemini' && entry.geminiSession) {
+            if (entry.agentBusy) {
+                logger.debug(`[sessionManager] ${sessionId}: input ignored (busy)`);
+                return;
+            }
+            entry.agentBusy = true;
+            try {
+                await entry.geminiSession.sendPrompt(text);
+                this.appendAndBroadcast(sessionId, {
+                    type: 'result',
+                    subtype: 'success',
+                    result: 'Done',
+                });
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.appendAndBroadcast(sessionId, {
+                    type: 'result',
+                    subtype: 'error',
+                    result: msg,
+                });
+            } finally {
+                entry.agentBusy = false;
+            }
+            return;
+        }
+
+        // Claude path: long-lived ClaudeChannel when enabled.
+        if (this.opts.useClaudeChannel) {
+            if (!entry.claudeChannel) {
+                entry.claudeChannel = this.spawnClaudeChannel(entry);
+            }
+            entry.claudeChannel.send(text).catch((err: Error) =>
+                logger.debug(`[sessionManager] ${sessionId}: channel send failed: ${err.message}`),
+            );
+            // pending count just changed; surface via session list.
+            this.emitSessionsChanged();
+            return;
+        }
+
+        // Legacy claude path: spawn `claude --print PROMPT` per turn.
         if (entry.agentBusy) {
             logger.debug(`[sessionManager] ${sessionId}: input ignored (busy)`);
             return;
         }
         entry.agentBusy = true;
-
         try {
-            if (entry.tool === 'gemini' && entry.geminiSession) {
-                try {
-                    await entry.geminiSession.sendPrompt(text);
-                    this.appendAndBroadcast(sessionId, {
-                        type: 'result',
-                        subtype: 'success',
-                        result: 'Done',
-                    });
-                } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    this.appendAndBroadcast(sessionId, {
-                        type: 'result',
-                        subtype: 'error',
-                        result: msg,
-                    });
-                }
-                return;
-            }
-
             await runClaudeProcess({
                 prompt: text,
                 resumeSessionId: entry.claudeSessionId,
@@ -278,8 +322,6 @@ export class SessionManager {
                 cwd: entry.cwd,
                 onEvent: (e) => this.appendAndBroadcast(sessionId, e),
                 onSessionId: (cid) => {
-                    // Persist on first observation only — Claude re-emits the
-                    // same id on every turn, no point rewriting the file.
                     if (entry.claudeSessionId === cid) return;
                     entry.claudeSessionId = cid;
                     this.persistEntry(entry);
@@ -293,6 +335,35 @@ export class SessionManager {
         }
     }
 
+    private spawnClaudeChannel(entry: SessionEntry): ClaudeChannel {
+        return new ClaudeChannel({
+            resumeSessionId: entry.claudeSessionId,
+            model: entry.model,
+            agentArgs: entry.agentArgs,
+            cwd: entry.cwd,
+            onEvent: (e) => {
+                this.appendAndBroadcast(entry.id, e);
+                // result events flip busy → idle (or to next queued turn);
+                // session list metadata needs refresh either way.
+                if ((e as { type?: string }).type === 'result') {
+                    this.emitSessionsChanged();
+                }
+            },
+            onSessionId: (cid) => {
+                if (entry.claudeSessionId === cid) return;
+                entry.claudeSessionId = cid;
+                this.persistEntry(entry);
+            },
+            onChannelDeath: (reason) => {
+                logger.debug(`[sessionManager] ${entry.id}: claude channel died: ${reason}`);
+                entry.claudeChannel = null;
+                this.emitSessionsChanged();
+            },
+            command: this.opts.claudeCommand,
+            extraEnv: this.opts.claudeExtraEnv,
+        });
+    }
+
     /** Returns the slice of events > fromSeq for replay. */
     replayFrom(sessionId: string, fromSeq: number): Array<{ seq: number; payload: unknown }> {
         const entry = this.sessions.get(sessionId);
@@ -303,6 +374,13 @@ export class SessionManager {
     abort(sessionId: string): void {
         const entry = this.sessions.get(sessionId);
         if (!entry) return;
+        if (entry.claudeChannel) {
+            entry.claudeChannel.abort().catch((err: Error) =>
+                logger.debug(`[sessionManager] ${sessionId}: channel abort failed: ${err.message}`),
+            );
+            this.emitSessionsChanged();
+            return;
+        }
         entry.abort.abort();
         entry.geminiSession?.dispose();
         entry.abort = new AbortController();
@@ -321,6 +399,7 @@ export class SessionManager {
 
     dispose(): void {
         for (const entry of this.sessions.values()) {
+            entry.claudeChannel?.close().catch(() => {});
             entry.abort.abort();
             entry.geminiSession?.dispose();
         }
@@ -372,6 +451,8 @@ export class SessionManager {
     }
 
     private toMeta(e: SessionEntry): SessionMeta {
+        const busy = e.claudeChannel ? e.claudeChannel.isBusy() : e.agentBusy;
+        const pending = e.claudeChannel?.pendingCount() ?? 0;
         return {
             id: e.id,
             tool: e.tool,
@@ -379,6 +460,8 @@ export class SessionManager {
             cwd: e.cwd,
             createdAt: e.createdAt,
             currentSeq: e.store.getCurrentSeq(),
+            busy,
+            pending,
         };
     }
 }

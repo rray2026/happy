@@ -169,6 +169,8 @@ describe('wsServer — two-phase protocol', () => {
             cwd: '/tmp',
             createdAt: 123,
             currentSeq: -1,
+            busy: false,
+            pending: 0,
         };
         rig.server.close();
         rig = await spin([meta]);
@@ -335,6 +337,8 @@ describe('wsServer — two-phase protocol', () => {
             cwd: '/tmp',
             createdAt: 1,
             currentSeq: 2,
+            busy: false,
+            pending: 0,
         };
         const sessionB: SessionMeta = {
             id: 'B',
@@ -343,6 +347,8 @@ describe('wsServer — two-phase protocol', () => {
             cwd: '/tmp',
             createdAt: 2,
             currentSeq: 1,
+            busy: false,
+            pending: 0,
         };
         const replays = new Map<string, Array<{ seq: number; payload: unknown }>>();
         replays.set('A', [

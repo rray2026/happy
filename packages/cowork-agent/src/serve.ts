@@ -63,6 +63,7 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
     let server!: WsServerHandle;
     const agentRoot = process.cwd();
 
+    const useClaudeChannel = process.env.COWORK_AGENT_USE_CHANNEL === '1';
     const manager = new SessionManager({
         cwd: agentRoot,
         geminiApiKey: opts.geminiApiKey,
@@ -70,6 +71,7 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
         onPersist: (session) => saveSession(sessionsDir, session),
         onPersistRemove: (sid) => removeSession(sessionsDir, sid),
+        useClaudeChannel,
     });
 
     // Read persisted session files *before* starting the server (pure I/O, no

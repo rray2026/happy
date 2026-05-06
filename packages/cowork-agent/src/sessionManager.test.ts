@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
-import { SessionManager } from './sessionManager.js';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SessionManager, type SessionMeta } from './sessionManager.js';
 import type { PersistedSession } from './sessionStorage.js';
+
+const FAKE_CLAUDE = fileURLToPath(
+    new URL('./__fixtures__/fake-claude-stream.mjs', import.meta.url),
+);
 
 function makeManager(overrides: {
     onPersist?: (s: PersistedSession) => void;
@@ -206,5 +211,138 @@ describe('SessionManager per-session cwd', () => {
         expect(() => mgr.create({ tool: 'claude', cwd: '/tmp/projectile' })).toThrow(
             /escapes agent root/,
         );
+    });
+});
+
+describe('SessionManager — claude channel path', () => {
+    interface ChannelHarness {
+        manager: SessionManager;
+        broadcasts: Array<{ sessionId: string; payload: unknown }>;
+        sessionsChanges: SessionMeta[][];
+    }
+
+    function makeChannelManager(): ChannelHarness {
+        const broadcasts: Array<{ sessionId: string; payload: unknown }> = [];
+        const sessionsChanges: SessionMeta[][] = [];
+        const manager = new SessionManager({
+            cwd: '/tmp',
+            onBroadcast: (sid, _seq, payload) => broadcasts.push({ sessionId: sid, payload }),
+            onSessionsChanged: (list) => sessionsChanges.push([...list]),
+            useClaudeChannel: true,
+            claudeCommand: FAKE_CLAUDE,
+        });
+        return { manager, broadcasts, sessionsChanges };
+    }
+
+    async function waitForResultBroadcast(
+        broadcasts: Array<{ payload: unknown }>,
+        prevCount: number,
+        timeoutMs = 3000,
+    ) {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            const newOnes = broadcasts.slice(prevCount);
+            if (newOnes.some((b) => (b.payload as { type?: string })?.type === 'result')) return;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        throw new Error('timed out waiting for result broadcast');
+    }
+
+    let h: ChannelHarness;
+    afterEach(() => h?.manager.dispose());
+
+    it('routes handleInput through ClaudeChannel and broadcasts result events', async () => {
+        h = makeChannelManager();
+        const meta = h.manager.create({ tool: 'claude' });
+        const before = h.broadcasts.length;
+
+        await h.manager.handleInput(meta.id, 'hello');
+        await waitForResultBroadcast(h.broadcasts, before);
+
+        const types = h.broadcasts.slice(before).map((b) => (b.payload as { type?: string })?.type);
+        // user (echo from manager) + system/init + assistant + result
+        expect(types).toContain('user');
+        expect(types).toContain('system');
+        expect(types).toContain('assistant');
+        expect(types).toContain('result');
+    });
+
+    it('SessionMeta exposes busy + pending and emits sessionsChanged on transitions', async () => {
+        h = makeChannelManager();
+        const meta = h.manager.create({ tool: 'claude' });
+
+        await h.manager.handleInput(meta.id, '__SLOW__:80:turn');
+        // After dispatch, the channel should be busy.
+        const live = h.manager.list().find((m) => m.id === meta.id)!;
+        expect(live.busy).toBe(true);
+
+        // Wait until busy flips back to false (cold-spawn + 80ms slow + event prop).
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+            const cur = h.manager.list().find((m) => m.id === meta.id)!;
+            if (!cur.busy) break;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        const settled = h.manager.list().find((m) => m.id === meta.id)!;
+        expect(settled.busy).toBe(false);
+        expect(settled.pending).toBe(0);
+
+        // sessionsChanged should have fired at least twice: once on dispatch (pending changed),
+        // once on result (busy reset).
+        expect(h.sessionsChanges.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('queues a second handleInput while the first turn is in flight', async () => {
+        h = makeChannelManager();
+        const meta = h.manager.create({ tool: 'claude' });
+
+        await h.manager.handleInput(meta.id, '__SLOW__:120:first');
+        await h.manager.handleInput(meta.id, 'second');
+
+        // Both should eventually produce result events.
+        const before = 0;
+        const start = Date.now();
+        while (Date.now() - start < 3000) {
+            const resultCount = h.broadcasts.filter(
+                (b) => (b.payload as { type?: string })?.type === 'result',
+            ).length;
+            if (resultCount >= 2) break;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        const results = h.broadcasts
+            .filter((b) => (b.payload as { type?: string })?.type === 'result')
+            .map((b) => (b.payload as { result: string }).result);
+        expect(results).toHaveLength(2);
+        expect(results[0]).toContain('first');
+        expect(results[1]).toContain('second');
+    });
+
+    it('abort() interrupts in-flight turn and the session continues to accept input', async () => {
+        h = makeChannelManager();
+        const meta = h.manager.create({ tool: 'claude' });
+
+        await h.manager.handleInput(meta.id, '__NO_RESULT__:hung');
+        // Wait for system/init to confirm the turn started.
+        await new Promise((r) => setTimeout(r, 100));
+
+        h.manager.abort(meta.id);
+
+        // Wait for result/error_during_execution to land.
+        const start = Date.now();
+        while (Date.now() - start < 3000) {
+            const found = h.broadcasts.some(
+                (b) => {
+                    const p = b.payload as { type?: string; subtype?: string };
+                    return p?.type === 'result' && p?.subtype === 'error_during_execution';
+                },
+            );
+            if (found) break;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+
+        // Follow-up input should be processed normally.
+        const before = h.broadcasts.length;
+        await h.manager.handleInput(meta.id, 'after-abort');
+        await waitForResultBroadcast(h.broadcasts, before);
     });
 });
