@@ -672,13 +672,14 @@ button:focus:not(:focus-visible) { outline: none; }
 .chat-messages > .msg-user + .msg-user,
 .chat-messages > .msg-assistant + .msg-assistant { margin-top: calc(var(--s-1) - var(--s-3)); }
 
-.msg-tools { display: flex; }
+.msg-tools { display: flex; min-width: 0; max-width: 100%; }
 
 .tools-group {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
+  min-width: 0;
 }
 .tools-header {
   display: inline-flex;
@@ -695,6 +696,9 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--text-secondary);
   text-align: left;
   transition: background var(--t-fast), color var(--t-fast);
+  /* Cap to the message column so long primary args don't blow out the
+     viewport on mobile — the inner .tools-primary handles ellipsis. */
+  max-width: 100%;
 }
 .tools-header:hover {
   color: var(--text);
@@ -859,6 +863,9 @@ button:focus:not(:focus-visible) { outline: none; }
   padding: var(--s-1) var(--s-3);
   border-radius: var(--r-full);
   align-self: flex-start;
+  max-width: 100%;
+  word-break: break-word;
+  white-space: normal;
 }
 .msg-result.success { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
 .msg-result.error   { color: var(--error);   background: color-mix(in srgb, var(--error)   12%, transparent); }
@@ -1304,7 +1311,16 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* ── Markdown ─────────────────────────────────────────────────────────────── */
 
-.markdown { font-size: var(--fs-base); line-height: 1.65; color: var(--text); }
+.markdown {
+  font-size: var(--fs-base);
+  line-height: 1.65;
+  color: var(--text);
+  min-width: 0;
+  max-width: 100%;
+  /* Break unbreakable strings (hashes, long IDs) before they push the
+     parent container wider than the viewport. */
+  overflow-wrap: anywhere;
+}
 .markdown p { margin: 0 0 var(--s-3); }
 .markdown p:last-child { margin-bottom: 0; }
 .markdown h1,
@@ -1342,9 +1358,18 @@ button:focus:not(:focus-visible) { outline: none; }
   padding: 0 0 0 var(--s-4);
   color: var(--text-secondary);
 }
-.markdown a { color: var(--accent); }
+.markdown a { color: var(--accent); word-break: break-all; }
 .markdown hr { border: none; border-top: 1px solid var(--border); margin: var(--s-4) 0; }
-.markdown table { border-collapse: collapse; width: 100%; margin-bottom: var(--s-3); }
+.markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: var(--s-3);
+  /* Tables can't shrink past their content, so let them scroll
+     horizontally instead of pushing the message column wider. */
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
 .markdown th,
 .markdown td { border: 1px solid var(--border); padding: var(--s-1) var(--s-3); text-align: left; }
 .markdown th { background: var(--surface); font-weight: 600; }
