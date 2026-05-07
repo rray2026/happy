@@ -8,6 +8,7 @@ import { loadNames } from '../session/nameStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
+import { summarizeToolCall } from './ToolCallView';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -24,17 +25,15 @@ function formatMsgTime(ts?: number): string {
         d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatToolInput(input: unknown): string {
-    if (input == null) return '';
-    if (typeof input === 'string') return input;
-    try { return JSON.stringify(input, null, 2); } catch { return String(input); }
-}
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 const ToolsItem = memo(function ToolsItem({ calls }: { calls: ToolCall[] }) {
     const [open, setOpen] = useState(false);
-    const label = calls.length === 1 ? calls[0].name : `${calls.length} 个工具调用`;
+    // Always render the latest call's per-tool summary in the header so the
+    // user sees what's currently happening at a glance. When multiple calls
+    // share this group, append a count so the total is also visible.
+    const latest = calls[calls.length - 1];
+    const latestSummary = latest ? summarizeToolCall(latest) : null;
     return (
         <div className="tools-group">
             <button
@@ -43,20 +42,31 @@ const ToolsItem = memo(function ToolsItem({ calls }: { calls: ToolCall[] }) {
                 onClick={() => setOpen((o) => !o)}
                 aria-expanded={open}
             >
-                <span className="tools-icon" aria-hidden="true">⚙</span>
-                <span className="tools-label">{label}</span>
+                {latestSummary && (
+                    <>
+                        <span className="tools-name">{latest.name}</span>
+                        <span className="tools-primary">{latestSummary.primary}</span>
+                    </>
+                )}
+                {calls.length > 1 && (
+                    <span className="tools-count">共 {calls.length} 个</span>
+                )}
                 <span className="tools-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
             </button>
             {open && (
                 <ul className="tools-list">
-                    {calls.map((call) => (
-                        <li key={call.toolUseId} className="tools-item">
-                            <div className="tools-item-name">{call.name}</div>
-                            {formatToolInput(call.input) && (
-                                <pre className="tools-item-input">{formatToolInput(call.input)}</pre>
-                            )}
-                        </li>
-                    ))}
+                    {calls.map((call) => {
+                        const s = summarizeToolCall(call);
+                        return (
+                            <li key={call.toolUseId} className="tools-item">
+                                <div className="tools-item-head">
+                                    <span className="tools-item-name">{call.name}</span>
+                                    <span className="tools-item-primary">{s.primary}</span>
+                                </div>
+                                {s.body && <div className="tools-item-body">{s.body}</div>}
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
         </div>

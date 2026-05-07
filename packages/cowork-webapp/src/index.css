@@ -700,8 +700,26 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--text);
   background: var(--surface-hover);
 }
-.tools-icon { flex-shrink: 0; }
 .tools-label { flex: 1; }
+.tools-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.tools-primary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.tools-count {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
 .tools-chevron { flex-shrink: 0; }
 
 .tools-list {
@@ -718,13 +736,64 @@ button:focus:not(:focus-visible) { outline: none; }
   flex-direction: column;
   gap: var(--s-1);
 }
-.tools-item-name {
+.tools-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
   font-family: var(--mono);
   font-size: var(--fs-xs);
+}
+.tools-item-name {
   font-weight: 600;
   color: var(--text);
+  flex-shrink: 0;
 }
-.tools-item-input {
+.tools-item-primary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.tools-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-top: var(--s-1);
+  padding-left: var(--s-3);
+}
+
+/* Per-tool argument typography */
+.tool-arg-code {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  background: var(--code-bg);
+  color: var(--text);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.tool-arg-path {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-arg-meta {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* Per-tool body blocks */
+.tool-body-code {
   margin: 0;
   padding: var(--s-2) var(--s-3);
   background: var(--code-bg);
@@ -737,6 +806,49 @@ button:focus:not(:focus-visible) { outline: none; }
   max-height: 280px;
   overflow: auto;
 }
+.tool-body-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Edit diff: keep red/green to distinguish old vs new — purely functional */
+.tool-diff-old {
+  background: color-mix(in srgb, var(--error) 8%, var(--code-bg));
+  border-left: 2px solid color-mix(in srgb, var(--error) 50%, transparent);
+}
+.tool-diff-new {
+  background: color-mix(in srgb, var(--success) 8%, var(--code-bg));
+  border-left: 2px solid color-mix(in srgb, var(--success) 50%, transparent);
+}
+
+/* TodoWrite list */
+.tool-body-todos {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tool-todo {
+  display: flex;
+  gap: var(--s-2);
+  font-size: var(--fs-xs);
+  font-family: var(--mono);
+  align-items: baseline;
+}
+.tool-todo-marker {
+  flex-shrink: 0;
+  width: 14px;
+  display: inline-block;
+  text-align: center;
+}
+.tool-todo-completed { color: var(--text-tertiary); text-decoration: line-through; }
+.tool-todo-in_progress { color: var(--text); font-weight: 600; }
+.tool-todo-pending { color: var(--text-secondary); }
 
 .msg-result {
   display: inline-flex;
