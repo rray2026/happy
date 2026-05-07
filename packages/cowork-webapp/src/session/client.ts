@@ -18,6 +18,10 @@ export interface SessionClientOptions {
     rpcTimeoutMs?: number;
     maxReconnectDelayMs?: number;
     initialReconnectDelayMs?: number;
+    /** Force-reconnect if no inbound msg arrives in this window (default 75s). */
+    staleThresholdMs?: number;
+    /** How often to evaluate the stale check (default 15s). */
+    staleCheckIntervalMs?: number;
     /** Test hook. Defaults to `window.location.protocol` in browser. */
     pageProtocol?: () => string;
 }
@@ -26,6 +30,11 @@ const DEFAULTS = {
     rpcTimeoutMs: 30_000,
     maxReconnectDelayMs: 30_000,
     initialReconnectDelayMs: 1_000,
+    /** Force-close the ws if no inbound msg arrives in this window. Server
+     *  pings every 30s, so anything past ~2x is "the connection is dead but
+     *  the browser hasn't told us" — typical after mobile backgrounding. */
+    staleThresholdMs: 75_000,
+    staleCheckIntervalMs: 15_000,
 };
 
 /**
@@ -56,12 +65,17 @@ export class SessionClient {
     private storedCredentials: StoredCredentials | null = null;
     private lastSeqs: Record<string, number> = {};
     private sessions: ChatSessionMeta[] = [];
+    private lastIncomingAt = 0;
+    private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
+    private visibilityHandler: (() => void) | null = null;
 
     private readonly storage: CredentialStorage;
     private readonly createWebSocket: WebSocketFactory;
     private readonly rpcTimeoutMs: number;
     private readonly maxReconnectDelayMs: number;
     private readonly initialReconnectDelayMs: number;
+    private readonly staleThresholdMs: number;
+    private readonly staleCheckIntervalMs: number;
     private readonly getPageProtocol: () => string;
 
     constructor(options: SessionClientOptions = {}) {
@@ -70,9 +84,12 @@ export class SessionClient {
         this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULTS.rpcTimeoutMs;
         this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULTS.maxReconnectDelayMs;
         this.initialReconnectDelayMs = options.initialReconnectDelayMs ?? DEFAULTS.initialReconnectDelayMs;
+        this.staleThresholdMs = options.staleThresholdMs ?? DEFAULTS.staleThresholdMs;
+        this.staleCheckIntervalMs = options.staleCheckIntervalMs ?? DEFAULTS.staleCheckIntervalMs;
         this.reconnectDelay = this.initialReconnectDelayMs;
         this.getPageProtocol = options.pageProtocol ?? (() =>
             typeof location !== 'undefined' ? location.protocol : 'http:');
+        this.installVisibilityHook();
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -106,6 +123,7 @@ export class SessionClient {
     disconnect(): void {
         this.closed = true;
         this.clearTimer();
+        this.stopStaleCheck();
         this.ws?.close();
         this.ws = null;
         this.setStatus('disconnected');
@@ -215,6 +233,7 @@ export class SessionClient {
 
             ws.onclose = () => {
                 this.ws = null;
+                this.stopStaleCheck();
                 if (!this.closed) {
                     this.setStatus('disconnected');
                     this.scheduleReconnect();
@@ -237,6 +256,9 @@ export class SessionClient {
     }
 
     private handleMessage(msg: unknown): void {
+        // Any inbound message — including keep-alive `ping` — counts as a
+        // sign of life. Bump first, before parsing.
+        this.lastIncomingAt = Date.now();
         if (!msg || typeof msg !== 'object') return;
         const m = msg as Record<string, unknown>;
 
@@ -261,6 +283,7 @@ export class SessionClient {
                 }
                 this.emitSessions();
                 this.setStatus('connected');
+                this.startStaleCheck();
                 break;
             }
             case 'sessions': {
@@ -342,6 +365,53 @@ export class SessionClient {
 
     private emitSessions(): void {
         this.sessionsHandlers.forEach((h) => h(this.sessions));
+    }
+
+    /**
+     * Mobile browsers (especially iOS Safari) freeze WebSocket I/O when the
+     * tab is backgrounded and sometimes return us to a "zombie" connection on
+     * resume — `readyState` is still OPEN but no messages flow. The agent
+     * pings every 30s; if we haven't seen *any* inbound traffic for well over
+     * that window, force-close so the normal reconnect path runs.
+     */
+    private startStaleCheck(): void {
+        this.stopStaleCheck();
+        this.lastIncomingAt = Date.now();
+        this.staleCheckTimer = setInterval(() => {
+            if (this.currentStatus !== 'connected') return;
+            if (Date.now() - this.lastIncomingAt > this.staleThresholdMs) {
+                try {
+                    this.ws?.close();
+                } catch {
+                    // ignore — onclose path will run anyway
+                }
+            }
+        }, this.staleCheckIntervalMs);
+    }
+
+    private stopStaleCheck(): void {
+        if (this.staleCheckTimer) {
+            clearInterval(this.staleCheckTimer);
+            this.staleCheckTimer = null;
+        }
+    }
+
+    /**
+     * On `visible`: if we're not connected, jump the reconnect queue. Mobile
+     * users often expect "open the tab → it's working" without a 30s wait.
+     */
+    private installVisibilityHook(): void {
+        if (typeof document === 'undefined') return;
+        if (this.visibilityHandler) return;
+        this.visibilityHandler = () => {
+            if (document.visibilityState !== 'visible') return;
+            if (this.closed) return;
+            if (this.currentStatus === 'connected') return;
+            this.clearTimer();
+            this.resetDelay();
+            this.open();
+        };
+        document.addEventListener('visibilitychange', this.visibilityHandler);
     }
 }
 
