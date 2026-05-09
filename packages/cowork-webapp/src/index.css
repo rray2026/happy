@@ -2059,6 +2059,21 @@ button:focus:not(:focus-visible) { outline: none; }
   line-height: 1;
 }
 
+/* Mobile: a corner status dot floats over the active tab. The full label is
+ * desktop-only — the dot alone is enough on a 56px bottom bar. */
+.tab-bar-status {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  pointer-events: none;
+  top: 6px;
+  right: calc(var(--s-3) + var(--safe-right));
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+.tab-bar-status-label { display: none; }
+
 @media (min-width: 769px) {
   .tab-bar-item {
     flex: 0 0 auto;
@@ -2074,6 +2089,12 @@ button:focus:not(:focus-visible) { outline: none; }
   .tab-bar-label {
     font-size: var(--fs-sm);
   }
+  .tab-bar-status {
+    position: static;
+    margin-left: auto;
+    color: var(--text-secondary);
+  }
+  .tab-bar-status-label { display: inline; }
 }
 
 /* Pages with tab bar: reserve space for the bar (bottom on mobile, top on

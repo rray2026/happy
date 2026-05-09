@@ -4,7 +4,6 @@ import type {
     DirectQRPayload,
     Item,
     ItemsHandler,
-    MessageHandler,
     PermissionEvent,
     PermissionHandler,
     RpcResponse,
@@ -55,7 +54,6 @@ const DEFAULTS = {
  */
 export class SessionClient {
     private ws: WebSocket | null = null;
-    private messageHandlers = new Set<MessageHandler>();
     private statusHandlers = new Set<StatusHandler>();
     private sessionsHandlers = new Set<SessionsHandler>();
     private rpcPending = new Map<string, (res: RpcResponse) => void>();
@@ -188,11 +186,6 @@ export class SessionClient {
             });
             this.send({ type: 'rpc', id, method, params });
         });
-    }
-
-    onMessage(handler: MessageHandler): () => void {
-        this.messageHandlers.add(handler);
-        return () => { this.messageHandlers.delete(handler); };
     }
 
     onStatusChange(handler: StatusHandler): () => void {
@@ -439,7 +432,6 @@ export class SessionClient {
                     }
                 }
                 if (sid) this.processIntoCache(sid, seq, m['payload']);
-                this.messageHandlers.forEach((h) => h(sid, m['payload'], seq));
                 break;
             }
             case 'ping':
@@ -561,12 +553,18 @@ export class SessionClient {
             this.bootstrappedSids.add(sessionId);
             return;
         }
+        // Welcome already pumped this session's full history to us (e.g. fresh
+        // page load with no persisted `lastSeqs[sid]`): cache is already in
+        // sync with the agent's currentSeq, so no replay needed and no
+        // flicker. Common case after a clean cold-start.
+        const processed = this.processedSeqs.get(sessionId) ?? -1;
+        if (meta && this.items.has(sessionId) && processed >= meta.currentSeq) {
+            this.bootstrappedSids.add(sessionId);
+            return;
+        }
         this.bootstrappedSids.add(sessionId);
-        // The welcome's replay only carries events past the persisted
-        // `lastSeqs[sid]`. To get the full picture, wipe the partial cache
-        // first so the upcoming replay rebuilds it without seq-dedup dropping
-        // the older entries. Costs one frame of "empty list" flicker; only
-        // happens once per session per page session.
+        // Partial cache (welcome only sent the delta past persisted lastSeqs):
+        // wipe so the replay rebuilds without seq-dedup dropping older entries.
         this.items.delete(sessionId);
         this.processedSeqs.delete(sessionId);
         this.emitItems(sessionId);

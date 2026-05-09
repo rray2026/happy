@@ -373,6 +373,36 @@ describe('SessionClient: per-session items cache', () => {
         expect(sockets[0].sent.length).toBe(sentBefore);
     });
 
+    it('does not replay (or flicker) when welcome already pumped the full history', async () => {
+        // Cold start: lastSeqs has no entry for this sid, so the welcome's
+        // replay covers the entire history. Cache and processedSeq line up
+        // with the agent's currentSeq. Subscribing should NOT wipe the cache
+        // or fire another `session.replay`.
+        const { client, sockets } = connectedWithSession('chat-a', /* currentSeq */ 1);
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: { type: 'user', message: { role: 'user', content: 'hi' } },
+        });
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 1,
+            payload: { type: 'user', message: { role: 'user', content: 'world' } },
+        });
+        const seen: number[] = [];
+        const sentBefore = sockets[0].sent.length;
+
+        client.onItemsChange('chat-a', (items) => seen.push(items.length));
+        await Promise.resolve();
+
+        // No new outbound frames (no replay), and the only handler call was
+        // the immediate-fire — no transient empty emission.
+        expect(sockets[0].sent.length).toBe(sentBefore);
+        expect(seen).toEqual([2]);
+    });
+
     it('GCs items + permission cache for a session that disappears from the list', () => {
         const { client, sockets } = connectedWithSession('chat-a');
         sockets[0].triggerMessage({
@@ -467,20 +497,6 @@ describe('SessionClient: message handling', () => {
         return setup;
     }
 
-    it('dispatches per-chat payload to all message handlers', () => {
-        const { client, sockets } = connectedClient();
-        const handler = vi.fn();
-        client.onMessage(handler);
-        sockets[0].triggerMessage({
-            type: 'message',
-            sessionId: 'chat-a',
-            seq: 1,
-            payload: { type: 'system', session_id: 'x' },
-        });
-        expect(handler).toHaveBeenCalledOnce();
-        expect(handler).toHaveBeenCalledWith('chat-a', { type: 'system', session_id: 'x' }, 1);
-    });
-
     it('tracks lastSeq per chat session independently', () => {
         const { client, sockets, storage } = connectedClient();
         sockets[0].triggerMessage({ type: 'message', sessionId: 'chat-a', seq: 5, payload: {} });
@@ -523,16 +539,6 @@ describe('SessionClient: message handling', () => {
         expect(() => sockets[0].triggerRawMessage('{ not json')).not.toThrow();
         expect(spy).toHaveBeenCalled();
         spy.mockRestore();
-    });
-
-    it('unsubscribing stops a handler from firing', () => {
-        const { client, sockets } = connectedClient();
-        const handler = vi.fn();
-        const unsub = client.onMessage(handler);
-        sockets[0].triggerMessage({ type: 'message', sessionId: 'x', seq: 1, payload: {} });
-        unsub();
-        sockets[0].triggerMessage({ type: 'message', sessionId: 'x', seq: 2, payload: {} });
-        expect(handler).toHaveBeenCalledOnce();
     });
 });
 

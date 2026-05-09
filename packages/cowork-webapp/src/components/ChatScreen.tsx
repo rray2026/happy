@@ -5,6 +5,7 @@ import { sessionClient } from '../session';
 import type { ChatSessionMeta, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
 import { uid } from '../session/events';
 import { loadNames } from '../session/nameStore';
+import { defaultName } from '../session/displayHelpers';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
@@ -134,18 +135,31 @@ export function ChatScreen() {
     const [logPath, setLogPath] = useState('');
     const [logsLoading, setLogsLoading] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
-    const [showScrollBtn, setShowScrollBtn] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [deleting, setDeleting] = useState(false);
-
-    const [chromeVisible, setChromeVisible] = useState(true);
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const logsBottomRef = useRef<HTMLDivElement>(null);
     const messagesRef = useRef<HTMLDivElement>(null);
+    const chatMainRef = useRef<HTMLDivElement>(null);
+    const fabRef = useRef<HTMLButtonElement>(null);
     const lastScrollTopRef = useRef(0);
+    // Visible/hidden flags ride on refs + classList instead of React state so
+    // a fast scroll wheel never triggers a render. Public setters mirror to
+    // the DOM.
+    const chromeHiddenRef = useRef(false);
+    const setChromeHidden = useCallback((hidden: boolean) => {
+        if (chromeHiddenRef.current === hidden) return;
+        chromeHiddenRef.current = hidden;
+        chatMainRef.current?.classList.toggle('chrome-hidden', hidden);
+    }, []);
+    const atBottomRef = useRef(true);
+    const setShowScrollBtn = useCallback((show: boolean) => {
+        atBottomRef.current = !show;
+        fabRef.current?.classList.toggle('hidden', !show);
+    }, []);
 
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
@@ -160,12 +174,13 @@ export function ChatScreen() {
         };
     }, [sessionId]);
 
-    // Auto-scroll to bottom only when not scrolled up
+    // Auto-scroll to bottom only when not scrolled up. The atBottomRef gets
+    // updated in handleScroll without triggering a render.
     useEffect(() => {
-        if (!showScrollBtn) {
+        if (atBottomRef.current) {
             bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [items, showScrollBtn]);
+    }, [items]);
 
     useEffect(() => {
         if (!drawerOpen) return;
@@ -194,14 +209,21 @@ export function ChatScreen() {
         // Mobile auto-hide: hide chrome while reading history (scroll up),
         // restore when scrolling back toward newest messages or reaching bottom.
         if (isTouchDevice) {
-            if (atBottom || delta > 5) setChromeVisible(true);
-            else if (delta < -5) setChromeVisible(false);
+            if (atBottom || delta > 5) setChromeHidden(false);
+            else if (delta < -5) setChromeHidden(true);
         }
-    }, []);
+    }, [setShowScrollBtn, setChromeHidden]);
 
     const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
     const isBusy = activeSession?.busy ?? false;
     const pendingCount = activeSession?.pending ?? 0;
+    // Read once per ChatScreen mount instead of every render. Renaming
+    // refreshes via the SessionListPage / SessionSidebar inputs and takes
+    // effect on the next mount of this screen — acceptable trade-off.
+    const headerName = useMemo(() => {
+        if (!activeSession) return 'Cowork';
+        return loadNames()[sessionId] ?? defaultName(activeSession);
+    }, [activeSession, sessionId]);
 
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setInput(e.target.value);
@@ -295,7 +317,7 @@ export function ChatScreen() {
                 aria-hidden="true"
             />
 
-            <div className={`chat-main${chromeVisible ? '' : ' chrome-hidden'}`}>
+            <div ref={chatMainRef} className="chat-main">
                 {/* Delete confirmation */}
                 <Modal
                     open={deleteConfirmOpen}
@@ -394,20 +416,12 @@ export function ChatScreen() {
                     </div>
 
                     <div className="chat-header-center">
-                        {activeSession ? (
-                            <>
-                                <div className="chat-header-name">
-                                    {loadNames()[sessionId] ??
-                                        ((activeSession.tool === 'claude' ? 'Claude' : 'Gemini') +
-                                        (activeSession.model ? ` · ${activeSession.model}` : ''))}
-                                </div>
-                                <div className="chat-header-sub">
-                                    <span className={`status-dot ${statusDot}`} aria-hidden="true" />
-                                    <span>{statusLabel}</span>
-                                </div>
-                            </>
-                        ) : (
-                            <div className="chat-header-name">Cowork</div>
+                        <div className="chat-header-name">{headerName}</div>
+                        {activeSession && (
+                            <div className="chat-header-sub">
+                                <span className={`status-dot ${statusDot}`} aria-hidden="true" />
+                                <span>{statusLabel}</span>
+                            </div>
                         )}
                     </div>
 
@@ -455,7 +469,7 @@ export function ChatScreen() {
                     className="chat-messages"
                     ref={messagesRef}
                     onScroll={handleScroll}
-                    onClick={() => { if (!chromeVisible) setChromeVisible(true); }}
+                    onClick={() => setChromeHidden(false)}
                 >
                     {items.length === 0 && !isBusy && (
                         <div className="chat-empty">
@@ -467,10 +481,12 @@ export function ChatScreen() {
                     <div ref={bottomRef} />
                 </div>
 
-                {/* Scroll-to-bottom FAB */}
+                {/* Scroll-to-bottom FAB. Visibility is toggled imperatively
+                 * via fabRef in handleScroll to avoid a render per scroll frame. */}
                 <button
+                    ref={fabRef}
                     type="button"
-                    className={`chat-fab${showScrollBtn ? '' : ' hidden'}`}
+                    className="chat-fab hidden"
                     onClick={() => {
                         setShowScrollBtn(false);
                         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -504,7 +520,7 @@ export function ChatScreen() {
                             value={input}
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
-                            onFocus={() => setChromeVisible(true)}
+                            onFocus={() => setChromeHidden(false)}
                             placeholder={placeholder}
                             rows={1}
                             disabled={status !== 'connected' || !sessionId}
