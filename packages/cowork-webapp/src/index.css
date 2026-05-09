@@ -1023,6 +1023,34 @@ button:focus:not(:focus-visible) { outline: none; }
 .chat-abort-btn:active { transform: scale(0.93); }
 .chat-abort-btn:disabled { opacity: 0.4; cursor: default; }
 
+/* Voice / dictation button */
+.chat-voice-btn {
+  width: 36px; height: 36px;
+  border-radius: var(--r-full);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast);
+  margin-bottom: 2px;
+}
+.chat-voice-btn:hover { background: var(--surface-hover); color: var(--text); }
+.chat-voice-btn:active { transform: scale(0.93); }
+.chat-voice-btn:disabled { opacity: 0.4; cursor: default; }
+.chat-voice-btn.listening {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  color: var(--error);
+  animation: chat-voice-pulse 1.4s ease-in-out infinite;
+}
+@keyframes chat-voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--error) 30%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--error) 0%, transparent); }
+}
+
 /* Queued-prompts hint above the input bar */
 .chat-pending-hint {
   margin: 0 var(--s-4) var(--s-2);
@@ -1035,10 +1063,11 @@ button:focus:not(:focus-visible) { outline: none; }
   width: fit-content;
 }
 
-/* Scroll-to-bottom FAB */
+/* Scroll-to-bottom FAB. Sits above the input bar — kept in sync via
+ * `--input-bar-h` so future bar-height tweaks don't strand the FAB. */
 .chat-fab {
   position: absolute;
-  bottom: calc(var(--s-4) + 68px);
+  bottom: calc(var(--s-4) + var(--input-bar-h) + var(--s-3));
   right: var(--s-4);
   width: 36px; height: 36px;
   border-radius: var(--r-full);

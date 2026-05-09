@@ -6,7 +6,7 @@ import type { ChatSessionMeta } from '../types';
 import { uid } from '../session/events';
 import { saveName, useNames } from '../session/nameStore';
 import { busyLabel, defaultName } from '../session/displayHelpers';
-import { usePendingPermission } from '../hooks/session';
+import { usePendingPermission, useSessions } from '../hooks/session';
 import { showToast } from '../toast/toastStore';
 import { Modal } from './Modal';
 import { NewSessionModal } from './NewSessionModal';
@@ -109,15 +109,13 @@ type PendingClose = { sessionId: string; label: string };
 
 export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDrawer }: Props) {
     const navigate = useNavigate();
-    const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
+    const sessions = useSessions();
     const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
     const [newSessionOpen, setNewSessionOpen] = useState(false);
     const names = useNames();
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editingValue, setEditingValue] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
-
-    useEffect(() => sessionClient.onSessionsChange(setSessions), []);
 
     useEffect(() => {
         if (editingId) inputRef.current?.focus();

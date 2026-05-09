@@ -497,6 +497,20 @@ describe('SessionClient: message handling', () => {
         return setup;
     }
 
+    it('dispatches per-chat payload to all message handlers', () => {
+        const { client, sockets } = connectedClient();
+        const handler = vi.fn();
+        client.onMessage(handler);
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 1,
+            payload: { type: 'system', session_id: 'x' },
+        });
+        expect(handler).toHaveBeenCalledOnce();
+        expect(handler).toHaveBeenCalledWith('chat-a', { type: 'system', session_id: 'x' }, 1);
+    });
+
     it('tracks lastSeq per chat session independently', () => {
         const { client, sockets, storage } = connectedClient();
         sockets[0].triggerMessage({ type: 'message', sessionId: 'chat-a', seq: 5, payload: {} });
@@ -539,6 +553,16 @@ describe('SessionClient: message handling', () => {
         expect(() => sockets[0].triggerRawMessage('{ not json')).not.toThrow();
         expect(spy).toHaveBeenCalled();
         spy.mockRestore();
+    });
+
+    it('unsubscribing stops a handler from firing', () => {
+        const { client, sockets } = connectedClient();
+        const handler = vi.fn();
+        const unsub = client.onMessage(handler);
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'x', seq: 1, payload: {} });
+        unsub();
+        sockets[0].triggerMessage({ type: 'message', sessionId: 'x', seq: 2, payload: {} });
+        expect(handler).toHaveBeenCalledOnce();
     });
 });
 

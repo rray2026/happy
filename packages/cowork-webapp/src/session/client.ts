@@ -4,6 +4,7 @@ import type {
     DirectQRPayload,
     Item,
     ItemsHandler,
+    MessageHandler,
     PermissionEvent,
     PermissionHandler,
     RpcResponse,
@@ -57,6 +58,7 @@ const DEFAULTS = {
  */
 export class SessionClient {
     private ws: WebSocket | null = null;
+    private messageHandlers = new Set<MessageHandler>();
     private statusHandlers = new Set<StatusHandler>();
     private sessionsHandlers = new Set<SessionsHandler>();
     private rpcPending = new Map<string, (res: RpcResponse) => void>();
@@ -191,6 +193,18 @@ export class SessionClient {
             });
             this.send({ type: 'rpc', id, method, params });
         });
+    }
+
+    /**
+     * Subscribe to raw `message` frames. Every inbound payload fires the
+     * handler regardless of seq dedup at the items pipeline layer. The UI
+     * should generally use `onItemsChange` / `onPermissionChange` instead;
+     * this is the escape hatch for integration tests and protocol-layer
+     * debug tooling.
+     */
+    onMessage(handler: MessageHandler): () => void {
+        this.messageHandlers.add(handler);
+        return () => { this.messageHandlers.delete(handler); };
     }
 
     onStatusChange(handler: StatusHandler): () => void {
@@ -450,6 +464,7 @@ export class SessionClient {
                     }
                 }
                 if (sid) this.processIntoCache(sid, seq, m['payload']);
+                this.messageHandlers.forEach((h) => h(sid, m['payload'], seq));
                 break;
             }
             case 'ping':
@@ -554,7 +569,15 @@ export class SessionClient {
             return;
         }
 
-        const newItems = eventToItems(payload as ClaudeEvent);
+        // Defensive: a malformed payload (wrong content shape, etc.) must not
+        // tear down the rest of the frame pipeline. Log and move on.
+        let newItems: Item[];
+        try {
+            newItems = eventToItems(payload as ClaudeEvent);
+        } catch (e) {
+            console.error('[SessionClient] eventToItems failed', e, payload);
+            return;
+        }
         if (!newItems.length) return;
         const next = mergeItems(this.items.get(sessionId) ?? [], newItems);
         this.items.set(sessionId, next);

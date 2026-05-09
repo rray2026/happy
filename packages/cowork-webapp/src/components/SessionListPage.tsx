@@ -8,7 +8,7 @@ import { Modal } from './Modal';
 import { uid } from '../session/events';
 import { saveName, useNames } from '../session/nameStore';
 import { busyLabel, defaultName, formatSessionTime } from '../session/displayHelpers';
-import { usePendingPermission } from '../hooks/session';
+import { usePendingPermission, useSessions } from '../hooks/session';
 import { showToast } from '../toast/toastStore';
 
 function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
@@ -117,7 +117,7 @@ type PendingClose = { sessionId: string; label: string };
 
 export function SessionListPage() {
     const navigate = useNavigate();
-    const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
+    const sessions = useSessions();
     const [newSessionOpen, setNewSessionOpen] = useState(false);
     const names = useNames();
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -125,8 +125,6 @@ export function SessionListPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
-
-    useEffect(() => sessionClient.onSessionsChange(setSessions), []);
 
     // Defensive resync on mount: covers reconnect timing edge cases where the
     // cached list could be stale (e.g. user opens the list right after a

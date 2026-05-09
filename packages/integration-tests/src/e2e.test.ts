@@ -95,7 +95,10 @@ describe('E2E: webapp SessionClient ↔ agent WebSocket server', () => {
         rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'first' } }); // seq 0
         await waitFor(() => received.length >= 1);
 
-        rig.pushChatEvent({ type: 'assistant', message: { role: 'assistant', content: 'ok' } }); // seq 1
+        rig.pushChatEvent({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+        }); // seq 1
         await waitFor(() => received.length >= 2);
 
         rig.pushChatEvent({ type: 'user', message: { role: 'user', content: 'second' } }); // seq 2

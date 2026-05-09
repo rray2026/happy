@@ -1,6 +1,13 @@
 // ── Socket types ──────────────────────────────────────────────────────────────
 
 export type SocketStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+/**
+ * Low-level frame handler. Fires for every inbound `message` frame, regardless
+ * of whether it's a duplicate seq replay. UI code should prefer the higher-
+ * level `onItemsChange` / `onPermissionChange`; this is the escape hatch for
+ * integration tests and protocol-layer debug tooling.
+ */
+export type MessageHandler = (sessionId: string, payload: unknown, seq: number) => void;
 export type StatusHandler = (status: SocketStatus) => void;
 /** Fires on initial `welcome` and on any subsequent `sessions` change-notify. */
 export type SessionsHandler = (sessions: ChatSessionMeta[]) => void;

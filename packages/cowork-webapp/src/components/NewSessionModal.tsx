@@ -53,7 +53,12 @@ export function NewSessionModal({ open, onClose, onCreated }: Props) {
         }
     }, []);
 
-    // Reset state + load root whenever the modal opens.
+    // Reset state + load root whenever the modal opens. Sync setState in an
+    // effect is intentional here — `open` is the conceptual "key" for the
+    // form, but using `key={open}` on the parent would unmount + remount the
+    // modal animation each time. The lint rule's preferred pattern doesn't
+    // apply cleanly to this once-per-open reset.
+    /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
         if (!open) return;
         setTool('claude');
@@ -62,6 +67,7 @@ export function NewSessionModal({ open, onClose, onCreated }: Props) {
         setPicker(null);
         void browseTo('');
     }, [open, browseTo]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     const handleCreate = async () => {
         setCreating(true);

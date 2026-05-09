@@ -8,9 +8,8 @@ import { SessionManager, type Tool } from '../../cowork-agent/src/sessionManager
 import { startWsServer } from '../../cowork-agent/src/wsServer.js';
 import type { CliKeys, WsServerHandle } from '../../cowork-agent/src/types.js';
 import { SessionClient } from '../../cowork-webapp/src/session/client';
-import { eventToItems, mergeItems } from '../../cowork-webapp/src/session/events';
 import { createMemoryStorage, type CredentialStorage } from '../../cowork-webapp/src/session/storage';
-import type { ClaudeEvent, DirectQRPayload, Item, StoredCredentials } from '../../cowork-webapp/src/types';
+import type { DirectQRPayload, Item, StoredCredentials } from '../../cowork-webapp/src/types';
 
 const FIXTURES_DIR = fileURLToPath(new URL('../fixtures/', import.meta.url));
 export const FAKE_CLAUDE = join(FIXTURES_DIR, 'fake-claude.mjs');
@@ -318,11 +317,11 @@ export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
     });
 
     const events: Array<{ sessionId: string; payload: unknown; seq: number }> = [];
-    let items: Item[] = [];
+    // Raw protocol-layer view: every inbound `message` frame, regardless of
+    // dedup. Tests use this for ordering / seq assertions.
     client.onMessage((sid, payload, seq) => {
         if (sid !== chatSessionId) return;
         events.push({ sessionId: sid, payload, seq });
-        items = mergeItems(items, eventToItems(payload as ClaudeEvent));
     });
 
     client.connectFirstTime(qrPayload, 'wa-pub');
@@ -336,8 +335,10 @@ export async function startCliRig(opts: CliRigOptions): Promise<CliRig> {
         storage,
         chatSessionId,
         events,
+        // UI-layer view: read straight from the SessionClient cache so tests
+        // exercise the same eventToItems + mergeItems pipeline production does.
         get items() {
-            return items;
+            return client.getItems(chatSessionId);
         },
         sendInput(text: string) {
             client.sendInput(chatSessionId, text);

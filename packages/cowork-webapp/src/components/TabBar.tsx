@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { MessagesSquare, Settings } from 'lucide-react';
-import { sessionClient } from '../session';
 import type { SocketStatus } from '../types';
+import { useStatus } from '../hooks/session';
 
 const TABS = [
     { path: '/sessions', label: '会话', Icon: MessagesSquare },
@@ -26,9 +25,7 @@ const STATUS_LABEL: Record<SocketStatus, string> = {
 export function TabBar() {
     const location = useLocation();
     const navigate = useNavigate();
-    const [status, setStatus] = useState<SocketStatus>(sessionClient.getStatus());
-
-    useEffect(() => sessionClient.onStatusChange(setStatus), []);
+    const status = useStatus();
 
     const active = (path: string) =>
         location.pathname === path || (path === '/sessions' && location.pathname.startsWith('/sessions'));

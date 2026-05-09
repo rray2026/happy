@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight } from 'lucide-react';
 import { sessionClient } from '../session';
-import { uid } from '../session/events';
 import { Modal } from './Modal';
+import { LogsModal } from './LogsModal';
 import { SessionTransferModal } from './SessionTransferModal';
 
 export function SettingsPage() {
@@ -11,29 +11,8 @@ export function SettingsPage() {
     const stored = sessionClient.loadStoredCredentials();
 
     const [logsOpen, setLogsOpen] = useState(false);
-    const [logLines, setLogLines] = useState<string[]>([]);
-    const [logPath, setLogPath] = useState('');
-    const [logsLoading, setLogsLoading] = useState(false);
     const [transferOpen, setTransferOpen] = useState(false);
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-
-    const logsBottomRef = useRef<HTMLDivElement>(null);
-
-    const handleOpenLogs = async () => {
-        setLogsOpen(true);
-        setLogsLoading(true);
-        try {
-            const res = await sessionClient.rpc(uid(), 'getLogs', { lines: 300 });
-            const r = res.result as { lines: string[]; logPath: string } | undefined;
-            setLogLines(r?.lines ?? [res.error ?? 'Error fetching logs']);
-            setLogPath(r?.logPath ?? '');
-        } catch (e) {
-            setLogLines([`Failed: ${e instanceof Error ? e.message : String(e)}`]);
-        } finally {
-            setLogsLoading(false);
-            setTimeout(() => logsBottomRef.current?.scrollIntoView(), 100);
-        }
-    };
 
     const handleDisconnect = () => {
         sessionClient.disconnect();
@@ -73,7 +52,7 @@ export function SettingsPage() {
                 <button
                     type="button"
                     className="settings-item"
-                    onClick={handleOpenLogs}
+                    onClick={() => setLogsOpen(true)}
                 >
                     <ScrollText size={18} className="settings-item-icon" />
                     <span className="settings-item-text">查看 CLI 日志</span>
@@ -101,43 +80,8 @@ export function SettingsPage() {
                 </button>
             </div>
 
-            {/* Logs viewer */}
-            <Modal
-                open={logsOpen}
-                title="CLI Logs"
-                onClose={() => setLogsOpen(false)}
-                size="lg"
-                bare
-                ariaLabel="CLI Logs"
-            >
-                <div className="logs-modal-card">
-                    <div className="logs-header">
-                        <div className="logs-title-group">
-                            <div className="logs-title">CLI 日志</div>
-                            {logPath && <div className="logs-path">{logPath}</div>}
-                        </div>
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => setLogsOpen(false)}
-                            aria-label="关闭日志"
-                        >
-                            ✕
-                        </button>
-                    </div>
-                    <div className="logs-body">
-                        {logsLoading
-                            ? <div className="logs-loading">加载中…</div>
-                            : logLines.length === 0
-                                ? <div className="logs-empty">暂无日志。</div>
-                                : logLines.map((line, i) => <div key={i} className="logs-line">{line}</div>)
-                        }
-                        <div ref={logsBottomRef} />
-                    </div>
-                </div>
-            </Modal>
+            <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
 
-            {/* Session transfer */}
             {transferOpen && (
                 <SessionTransferModal
                     onClose={() => setTransferOpen(false)}
@@ -145,7 +89,6 @@ export function SettingsPage() {
                 />
             )}
 
-            {/* Disconnect confirmation */}
             <Modal
                 open={confirmDisconnect}
                 title="断开并清除凭据？"

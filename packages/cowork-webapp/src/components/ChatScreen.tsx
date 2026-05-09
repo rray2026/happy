@@ -1,16 +1,20 @@
-import { useState, useEffect, useRef, useCallback, memo, useMemo, useSyncExternalStore } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo, useSyncExternalStore, useLayoutEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, X, Square } from 'lucide-react';
+import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, Square, Mic } from 'lucide-react';
 import { sessionClient } from '../session';
-import type { ChatSessionMeta, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
+import type { Item, PermissionEvent, ToolCall } from '../types';
 import { uid } from '../session/events';
 import { useNames } from '../session/nameStore';
 import { defaultName } from '../session/displayHelpers';
 import { useEscape, useScrollLock } from '../hooks/overlay';
+import { useSessions, useStatus } from '../hooks/session';
+import { useSpeechRecognition } from '../hooks/voice';
+import { clearDraft, getDraft, setDraft } from '../session/draftStore';
 import { dismissToast, showToast } from '../toast/toastStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
+import { LogsModal } from './LogsModal';
 import { summarizeToolCall } from './ToolCallView';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -125,8 +129,8 @@ export function ChatScreen() {
     const params = useParams<{ sessionId: string }>();
     const sessionId = params.sessionId ?? '';
 
-    const [status, setStatus] = useState<SocketStatus>(sessionClient.getStatus());
-    const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
+    const status = useStatus();
+    const sessions = useSessions();
     // Per-session items + pending permission read straight from the client's
     // cache; useSyncExternalStore re-binds when sessionId changes, so this
     // ChatScreen can keep mounted across session switches without a flash of
@@ -141,9 +145,6 @@ export function ChatScreen() {
     );
     const [input, setInput] = useState('');
     const [logsOpen, setLogsOpen] = useState(false);
-    const [logLines, setLogLines] = useState<string[]>([]);
-    const [logPath, setLogPath] = useState('');
-    const [logsLoading, setLogsLoading] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -151,7 +152,6 @@ export function ChatScreen() {
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const logsBottomRef = useRef<HTMLDivElement>(null);
     const messagesRef = useRef<HTMLDivElement>(null);
     const chatMainRef = useRef<HTMLDivElement>(null);
     const fabRef = useRef<HTMLButtonElement>(null);
@@ -171,15 +171,6 @@ export function ChatScreen() {
         fabRef.current?.classList.toggle('hidden', !show);
     }, []);
 
-    useEffect(() => {
-        const unsubStatus = sessionClient.onStatusChange(setStatus);
-        const unsubSessions = sessionClient.onSessionsChange(setSessions);
-        return () => {
-            unsubStatus();
-            unsubSessions();
-        };
-    }, []);
-
     // Reset local UI state when the user switches sessions. The items and
     // permission caches re-bind via useSyncExternalStore above, but per-screen
     // ephemera (input draft, open menu/drawer, scroll position, chrome
@@ -189,7 +180,9 @@ export function ChatScreen() {
     // prop key would otherwise change," now that we've dropped key={sessionId}.
     /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
-        setInput('');
+        // Restore any draft the user left in this session — never the
+        // previous session's text.
+        setInput(getDraft(sessionId));
         setDrawerOpen(false);
         setMenuOpen(false);
         setLogsOpen(false);
@@ -203,6 +196,13 @@ export function ChatScreen() {
         dismissToast(`perm-${sessionId}`);
     }, [sessionId, setChromeHidden, setShowScrollBtn]);
     /* eslint-enable react-hooks/set-state-in-effect */
+
+    // Persist the current draft to localStorage with a small debounce so a
+    // refresh / accidental close doesn't lose half-typed messages.
+    useEffect(() => {
+        const handle = setTimeout(() => setDraft(sessionId, input), 300);
+        return () => clearTimeout(handle);
+    }, [sessionId, input]);
 
     // Auto-scroll to bottom only when not scrolled up. The atBottomRef gets
     // updated in handleScroll without triggering a render.
@@ -239,13 +239,17 @@ export function ChatScreen() {
     const names = useNames();
     const headerName = activeSession ? (names[sessionId] ?? defaultName(activeSession)) : 'Cowork';
 
+    // Auto-grow the textarea whenever `input` changes, regardless of source
+    // (typing, voice transcript, draft restore).
+    useLayoutEffect(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+    }, [input]);
+
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setInput(e.target.value);
-        const el = inputRef.current;
-        if (el) {
-            el.style.height = 'auto';
-            el.style.height = Math.min(el.scrollHeight, 140) + 'px';
-        }
     }, []);
 
     const handleSend = useCallback(() => {
@@ -254,10 +258,53 @@ export function ChatScreen() {
         sessionClient.sendInput(sessionId, text);
         sessionClient.appendOptimisticUser(sessionId, text);
         setInput('');
-        const el = inputRef.current;
-        if (el) el.style.height = 'auto';
+        clearDraft(sessionId);
         setTimeout(() => inputRef.current?.focus(), 0);
     }, [input, status, sessionId]);
+
+    // Voice dictation: appends transcribed words to the input box. We hold a
+    // "baseline" snapshot of whatever the user had typed before pressing the
+    // mic, plus refs for the running final + interim text, and recompute the
+    // visible value on every result.
+    const voiceBaselineRef = useRef('');
+    const voiceFinalRef = useRef('');
+    const voiceInterimRef = useRef('');
+    const composeVoiceInput = useCallback(() => {
+        const parts = [voiceBaselineRef.current, voiceFinalRef.current, voiceInterimRef.current]
+            .map((p) => p.trim())
+            .filter(Boolean);
+        return parts.join(' ');
+    }, []);
+    const speech = useSpeechRecognition({
+        onTranscript: (text, final) => {
+            if (final) {
+                voiceFinalRef.current = (voiceFinalRef.current + ' ' + text).trim();
+                voiceInterimRef.current = '';
+            } else {
+                voiceInterimRef.current = text;
+            }
+            setInput(composeVoiceInput());
+        },
+        onError: (msg) => showToast(`语音输入：${msg}`, { kind: 'error' }),
+    });
+
+    const handleVoiceToggle = useCallback(() => {
+        if (speech.listening) {
+            speech.stop();
+            // Drop any pending interim that hadn't been finalised; commit the
+            // accumulated final text into the input as the new baseline so
+            // further typing extends it normally.
+            voiceInterimRef.current = '';
+            voiceBaselineRef.current = composeVoiceInput();
+            voiceFinalRef.current = '';
+            setInput(voiceBaselineRef.current);
+        } else {
+            voiceBaselineRef.current = input;
+            voiceFinalRef.current = '';
+            voiceInterimRef.current = '';
+            speech.start();
+        }
+    }, [speech, input, composeVoiceInput]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey && !isTouchDevice) {
@@ -284,22 +331,6 @@ export function ChatScreen() {
             );
         sessionClient.clearPendingPermission(sessionId);
     }, [permission, sessionId]);
-
-    const handleOpenLogs = useCallback(async () => {
-        setLogsOpen(true);
-        setLogsLoading(true);
-        try {
-            const res = await sessionClient.rpc(uid(), 'getLogs', { lines: 300 });
-            const r = res.result as { lines: string[]; logPath: string } | undefined;
-            setLogLines(r?.lines ?? [res.error ?? 'Error fetching logs']);
-            setLogPath(r?.logPath ?? '');
-        } catch (e) {
-            setLogLines([`Failed: ${e instanceof Error ? e.message : String(e)}`]);
-        } finally {
-            setLogsLoading(false);
-            setTimeout(() => logsBottomRef.current?.scrollIntoView(), 100);
-        }
-    }, []);
 
     const handleDeleteSession = useCallback(async () => {
         setDeleting(true);
@@ -388,36 +419,7 @@ export function ChatScreen() {
                     )}
                 </Modal>
 
-                {/* Logs viewer */}
-                <Modal
-                    open={logsOpen}
-                    title="CLI Logs"
-                    onClose={() => setLogsOpen(false)}
-                    size="lg"
-                    bare
-                    ariaLabel="CLI Logs"
-                >
-                    <div className="logs-modal-card">
-                        <div className="logs-header">
-                            <div className="logs-title-group">
-                                <div className="logs-title">CLI 日志</div>
-                                {logPath && <div className="logs-path">{logPath}</div>}
-                            </div>
-                            <button type="button" className="icon-btn" onClick={() => setLogsOpen(false)} aria-label="关闭日志">
-                                <X size={18} />
-                            </button>
-                        </div>
-                        <div className="logs-body">
-                            {logsLoading
-                                ? <div className="logs-loading">加载中…</div>
-                                : logLines.length === 0
-                                    ? <div className="logs-empty">暂无日志。</div>
-                                    : logLines.map((line, i) => <div key={i} className="logs-line">{line}</div>)
-                            }
-                            <div ref={logsBottomRef} />
-                        </div>
-                    </div>
-                </Modal>
+                <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
 
                 {/* IM-style header */}
                 <div className="chat-header">
@@ -457,7 +459,7 @@ export function ChatScreen() {
                             <button
                                 type="button"
                                 className="icon-btn"
-                                onClick={handleOpenLogs}
+                                onClick={() => setLogsOpen(true)}
                                 aria-label="查看日志"
                                 title="查看日志"
                             >
@@ -553,6 +555,19 @@ export function ChatScreen() {
                             disabled={status !== 'connected' || !sessionId}
                         />
                     </div>
+                    {speech.supported && (
+                        <button
+                            type="button"
+                            className={`chat-voice-btn${speech.listening ? ' listening' : ''}`}
+                            onClick={handleVoiceToggle}
+                            aria-label={speech.listening ? '停止语音输入' : '开始语音输入'}
+                            aria-pressed={speech.listening}
+                            title={speech.listening ? '停止语音输入' : '开始语音输入'}
+                            disabled={status !== 'connected' || !sessionId}
+                        >
+                            <Mic size={18} />
+                        </button>
+                    )}
                     {isBusy ? (
                         <button
                             type="button"
