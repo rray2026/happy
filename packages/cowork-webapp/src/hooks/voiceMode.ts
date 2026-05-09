@@ -40,6 +40,9 @@ export interface VoiceModeHandle {
     suspended: boolean;
     /** True when the underlying APIs (STT + TTS) are both available. */
     supported: boolean;
+    /** Live transcription preview: finalised words plus the current interim
+     *  hypothesis. Cleared on send / stop / cancel. Empty when not listening. */
+    liveTranscript: string;
     setActive: (next: boolean) => void;
     toggle: () => void;
     /** Cancel current TTS and any pending sentences; voice loop returns to listening. */
@@ -165,6 +168,11 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
      *  this as its own phase ("等待发送…") so the user knows their utterance
      *  was heard and is about to leave. */
     const [silenceCountdown, setSilenceCountdown] = useState(false);
+    /** Live preview shown in the status bar so the user can see whether STT
+     *  is hearing them right (drivers may glance, desktop users use it to
+     *  catch misrecognitions before the silence timer fires). Includes
+     *  finalised text plus the current interim hypothesis. */
+    const [liveTranscript, setLiveTranscript] = useState('');
     const suspended = active && (hasInput || hasPermission);
 
     // ── TTS plumbing ────────────────────────────────────────────────────────
@@ -282,8 +290,15 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     const stt = useSpeechRecognition({
         lang: voiceLang,
         onTranscript: (text, final) => {
-            if (!final) return;
+            if (!final) {
+                // Interim hypothesis — show finalised text so far + this
+                // tentative chunk so the user can see it forming.
+                const merged = (transcriptRef.current + ' ' + text).trim();
+                if (merged) setLiveTranscript(merged);
+                return;
+            }
             transcriptRef.current = (transcriptRef.current + ' ' + text).trim();
+            setLiveTranscript(transcriptRef.current);
 
             // Wake-word fast-path: if the user said the configured trigger
             // at the tail of the utterance, send immediately and skip the
@@ -293,6 +308,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 if (stripped !== null) {
                     cancelSilenceTimer();
                     transcriptRef.current = '';
+                    setLiveTranscript('');
                     if (stripped && active && !suspended) {
                         sessionClient.sendInput(sessionId, stripped);
                         sessionClient.appendOptimisticUser(sessionId, stripped);
@@ -309,6 +325,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 setSilenceCountdown(false);
                 const pending = transcriptRef.current.trim();
                 transcriptRef.current = '';
+                setLiveTranscript('');
                 if (pending && active && !suspended) {
                     sessionClient.sendInput(sessionId, pending);
                     sessionClient.appendOptimisticUser(sessionId, pending);
@@ -339,6 +356,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         if (!active || suspended) {
             cancelSilenceTimer();
             transcriptRef.current = '';
+            setLiveTranscript('');
             if (stt.listening) stt.stop();
             return;
         }
@@ -364,6 +382,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         if (tts.speaking) tts.cancel();
         cancelSilenceTimer();
         transcriptRef.current = '';
+        setLiveTranscript('');
     }, [active, suspended, tts, cancelSilenceTimer]);
 
     // ── Session change / unmount: turn off entirely. ────────────────────────
@@ -431,6 +450,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         phase,
         suspended,
         supported: stt.supported && tts.supported,
+        liveTranscript,
         setActive,
         toggle,
         stopReading,

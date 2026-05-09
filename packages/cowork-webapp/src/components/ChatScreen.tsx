@@ -534,7 +534,11 @@ export function ChatScreen() {
                 </div>
 
                 {voiceMode.active && (
-                    <VoiceModeBar phase={voiceMode.phase} suspended={voiceMode.suspended} />
+                    <VoiceModeBar
+                        phase={voiceMode.phase}
+                        suspended={voiceMode.suspended}
+                        transcript={voiceMode.liveTranscript}
+                    />
                 )}
 
                 <div
