@@ -97,21 +97,24 @@ function normalizeForTrigger(s: string): string {
 /**
  * If `transcript` ends with `trigger` (after normalization), return the
  * transcript with the trigger portion removed. Otherwise return null.
+ *
+ * Walks the original right-to-left counting *normalized* characters (i.e.
+ * skipping whitespace + punctuation) until we've covered the full trigger.
+ * That index is exactly where the trigger starts in the original; everything
+ * before it is the user's actual message, with any trailing whitespace /
+ * punctuation right before the trigger trimmed off.
  */
 function stripTrailingTrigger(transcript: string, trigger: string): string | null {
     const triggerNorm = normalizeForTrigger(trigger);
     if (!triggerNorm) return null;
-    const transcriptNorm = normalizeForTrigger(transcript);
-    if (!transcriptNorm.endsWith(triggerNorm)) return null;
-    // Walk the original right-to-left, peeling one character at a time, until
-    // the remainder's normalized form no longer ends with the trigger. The
-    // peeled tail is the trigger plus any whitespace/punctuation surrounding
-    // it — exactly what we want to drop.
-    let end = transcript.length;
-    while (end > 0 && normalizeForTrigger(transcript.slice(0, end)).endsWith(triggerNorm)) {
-        end--;
+    if (!normalizeForTrigger(transcript).endsWith(triggerNorm)) return null;
+    let i = transcript.length;
+    let counted = 0;
+    while (i > 0 && counted < triggerNorm.length) {
+        i--;
+        if (!/[\s\p{P}]/u.test(transcript[i])) counted += 1;
     }
-    return transcript.slice(0, end).trim();
+    return transcript.slice(0, i).replace(/[\s\p{P}]+$/u, '').trim();
 }
 
 /** First chunk-end position after `start`, or -1 if we should wait for more text. */
