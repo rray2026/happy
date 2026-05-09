@@ -23,6 +23,10 @@ export interface Settings {
      *  without waiting for the silence buffer. Empty = disabled.
      *  Matched after stripping whitespace and punctuation, case-insensitively. */
     sendTrigger?: string;
+    /** Wake word that, when said anywhere in an utterance, cancels current
+     *  TTS readback and aborts the agent's in-flight turn. The transcript is
+     *  discarded. Empty = disabled. Same normalization rules as sendTrigger. */
+    interruptTrigger?: string;
     /** Skip fenced + inline code blocks during TTS. Default true. */
     skipCode?: boolean;
     /** Play a short audio cue when the agent invokes a tool (instead of reading it). Default true. */
