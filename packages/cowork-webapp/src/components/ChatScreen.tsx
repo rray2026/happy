@@ -7,6 +7,7 @@ import { uid } from '../session/events';
 import { useNames } from '../session/nameStore';
 import { defaultName } from '../session/displayHelpers';
 import { useEscape, useScrollLock } from '../hooks/overlay';
+import { dismissToast, showToast } from '../toast/toastStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
@@ -89,7 +90,7 @@ const MessageItem = memo(function MessageItem({ item }: { item: Item }) {
             return (
                 <div className="msg-assistant">
                     <div className={`msg-assistant-bubble${item.streaming ? ' streaming' : ''}`}>
-                        <MarkdownMessage text={item.text} />
+                        <MarkdownMessage text={item.text} streaming={item.streaming} />
                     </div>
                     {!item.streaming && time && <div className="msg-time">{time}</div>}
                 </div>
@@ -197,6 +198,9 @@ export function ChatScreen() {
         setChromeHidden(false);
         setShowScrollBtn(false);
         atBottomRef.current = true;
+        // If a permission toast for this session was raised before the user
+        // got here, the modal we render below now owns the prompt — drop it.
+        dismissToast(`perm-${sessionId}`);
     }, [sessionId, setChromeHidden, setShowScrollBtn]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -266,14 +270,18 @@ export function ChatScreen() {
         if (!sessionId) return;
         sessionClient
             .rpc(uid(), 'session.abort', { sessionId })
-            .catch(() => {});
+            .catch((e: unknown) =>
+                showToast(`中断失败：${e instanceof Error ? e.message : String(e)}`, { kind: 'error' }),
+            );
     }, [sessionId]);
 
     const handlePermission = useCallback((approved: boolean) => {
         if (!permission) return;
         sessionClient
             .rpc(uid(), 'session.permissionResponse', { sessionId, permissionId: permission.permissionId, approved })
-            .catch(() => {});
+            .catch((e: unknown) =>
+                showToast(`回应权限请求失败：${e instanceof Error ? e.message : String(e)}`, { kind: 'error' }),
+            );
         sessionClient.clearPendingPermission(sessionId);
     }, [permission, sessionId]);
 
@@ -296,8 +304,17 @@ export function ChatScreen() {
     const handleDeleteSession = useCallback(async () => {
         setDeleting(true);
         try {
-            await sessionClient.rpc(uid(), 'session.close', { sessionId });
-        } catch { /* ignore — session list will update regardless */ }
+            const res = await sessionClient.rpc(uid(), 'session.close', { sessionId });
+            if (res.error) {
+                showToast(`删除失败：${res.error}`, { kind: 'error' });
+                setDeleting(false);
+                return;
+            }
+        } catch (e) {
+            showToast(`删除失败：${e instanceof Error ? e.message : String(e)}`, { kind: 'error' });
+            setDeleting(false);
+            return;
+        }
         setDeleting(false);
         setDeleteConfirmOpen(false);
         navigate('/sessions');

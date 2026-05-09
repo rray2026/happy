@@ -8,6 +8,8 @@ import { Modal } from './Modal';
 import { uid } from '../session/events';
 import { saveName, useNames } from '../session/nameStore';
 import { busyLabel, defaultName, formatSessionTime } from '../session/displayHelpers';
+import { usePendingPermission } from '../hooks/session';
+import { showToast } from '../toast/toastStore';
 
 function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
     return (
@@ -16,6 +18,100 @@ function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
         </div>
     );
 }
+
+interface RowProps {
+    session: ChatSessionMeta;
+    name: string;
+    isEditing: boolean;
+    editingValue: string;
+    onEditingChange: (v: string) => void;
+    onCommitEdit: () => void;
+    onEditKeyDown: (e: React.KeyboardEvent) => void;
+    onSelect: () => void;
+    onStartEdit: (e: React.MouseEvent) => void;
+    onRequestClose: (e: React.MouseEvent) => void;
+    inputRef: React.RefObject<HTMLInputElement | null>;
+}
+
+const SessionRowItem = ({
+    session: s,
+    name,
+    isEditing,
+    editingValue,
+    onEditingChange,
+    onCommitEdit,
+    onEditKeyDown,
+    onSelect,
+    onStartEdit,
+    onRequestClose,
+    inputRef,
+}: RowProps) => {
+    const busy = busyLabel(s);
+    const pendingPerm = usePendingPermission(s.id);
+    return (
+        <div
+            className={`session-row${isEditing ? ' session-row-editing' : ''}${pendingPerm ? ' session-row-needs-attention' : ''}`}
+            onClick={() => !isEditing && onSelect()}
+        >
+            <SessionAvatar tool={s.tool} />
+            <div className="session-row-content">
+                <div className="session-row-title-row">
+                    {isEditing ? (
+                        <input
+                            ref={inputRef}
+                            className="session-row-name-input"
+                            value={editingValue}
+                            onChange={e => onEditingChange(e.target.value)}
+                            onKeyDown={onEditKeyDown}
+                            onBlur={onCommitEdit}
+                            onClick={e => e.stopPropagation()}
+                            maxLength={40}
+                        />
+                    ) : (
+                        <>
+                            <span className="session-row-name">{name}</span>
+                            <span className="session-row-time">{formatSessionTime(s.createdAt)}</span>
+                        </>
+                    )}
+                </div>
+                <div className="session-row-sub">
+                    {pendingPerm ? (
+                        <span className="session-row-attn">等待你的授权</span>
+                    ) : busy ? (
+                        <span className="session-row-busy">
+                            <span className="session-row-busy-dot" aria-hidden="true" />
+                            {busy}
+                        </span>
+                    ) : (
+                        s.cwd || s.id.slice(0, 12)
+                    )}
+                </div>
+            </div>
+            {!isEditing && (
+                <div className="session-row-actions">
+                    <button
+                        type="button"
+                        className="session-row-icon-btn"
+                        onClick={onStartEdit}
+                        aria-label="重命名"
+                        title="重命名"
+                    >
+                        <Pencil size={14} />
+                    </button>
+                    <button
+                        type="button"
+                        className="session-row-icon-btn session-row-icon-btn-danger"
+                        onClick={onRequestClose}
+                        aria-label="关闭会话"
+                        title="关闭会话"
+                    >
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+};
 
 type PendingClose = { sessionId: string; label: string };
 
@@ -44,8 +140,8 @@ export function SessionListPage() {
         setRefreshing(true);
         try {
             await sessionClient.refreshSessions();
-        } catch {
-            // Surfaced via the unchanged list — no toast plumbing here.
+        } catch (e) {
+            showToast(`刷新失败：${e instanceof Error ? e.message : String(e)}`, { kind: 'error' });
         } finally {
             setRefreshing(false);
         }
@@ -85,7 +181,12 @@ export function SessionListPage() {
         if (!pendingClose) return;
         const { sessionId } = pendingClose;
         setPendingClose(null);
-        await sessionClient.rpc(uid(), 'session.close', { sessionId }).catch(() => {});
+        try {
+            const res = await sessionClient.rpc(uid(), 'session.close', { sessionId });
+            if (res.error) showToast(`关闭失败：${res.error}`, { kind: 'error' });
+        } catch (e) {
+            showToast(`关闭失败：${e instanceof Error ? e.message : String(e)}`, { kind: 'error' });
+        }
     }, [pendingClose]);
 
     return (
@@ -121,73 +222,22 @@ export function SessionListPage() {
                         <p className="session-list-empty-sub">点击右上角 + 新建会话</p>
                     </div>
                 ) : (
-                    sessions.map((s) => {
-                        const isEditing = editingId === s.id;
-                        const name = names[s.id] ?? defaultName(s);
-                        const busy = busyLabel(s);
-                        return (
-                            <div
-                                key={s.id}
-                                className={`session-row${isEditing ? ' session-row-editing' : ''}`}
-                                onClick={() => !isEditing && navigate(`/sessions/${s.id}`)}
-                            >
-                                <SessionAvatar tool={s.tool} />
-                                <div className="session-row-content">
-                                    <div className="session-row-title-row">
-                                        {isEditing ? (
-                                            <input
-                                                ref={inputRef}
-                                                className="session-row-name-input"
-                                                value={editingValue}
-                                                onChange={e => setEditingValue(e.target.value)}
-                                                onKeyDown={handleEditKeyDown}
-                                                onBlur={commitEdit}
-                                                onClick={e => e.stopPropagation()}
-                                                maxLength={40}
-                                            />
-                                        ) : (
-                                            <>
-                                                <span className="session-row-name">{name}</span>
-                                                <span className="session-row-time">{formatSessionTime(s.createdAt)}</span>
-                                            </>
-                                        )}
-                                    </div>
-                                    <div className="session-row-sub">
-                                        {busy ? (
-                                            <span className="session-row-busy">
-                                                <span className="session-row-busy-dot" aria-hidden="true" />
-                                                {busy}
-                                            </span>
-                                        ) : (
-                                            s.cwd || s.id.slice(0, 12)
-                                        )}
-                                    </div>
-                                </div>
-                                {!isEditing && (
-                                    <div className="session-row-actions">
-                                        <button
-                                            type="button"
-                                            className="session-row-icon-btn"
-                                            onClick={(e) => startEdit(s, e)}
-                                            aria-label="重命名"
-                                            title="重命名"
-                                        >
-                                            <Pencil size={14} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="session-row-icon-btn session-row-icon-btn-danger"
-                                            onClick={(e) => requestClose(s, e)}
-                                            aria-label="关闭会话"
-                                            title="关闭会话"
-                                        >
-                                            <X size={14} />
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })
+                    sessions.map((s) => (
+                        <SessionRowItem
+                            key={s.id}
+                            session={s}
+                            name={names[s.id] ?? defaultName(s)}
+                            isEditing={editingId === s.id}
+                            editingValue={editingValue}
+                            onEditingChange={setEditingValue}
+                            onCommitEdit={commitEdit}
+                            onEditKeyDown={handleEditKeyDown}
+                            onSelect={() => navigate(`/sessions/${s.id}`)}
+                            onStartEdit={(e) => startEdit(s, e)}
+                            onRequestClose={(e) => requestClose(s, e)}
+                            inputRef={inputRef}
+                        />
+                    ))
                 )}
             </div>
 

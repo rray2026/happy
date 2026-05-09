@@ -14,6 +14,7 @@ import type {
 } from '../types';
 import { eventToItems, mergeItems, uid } from './events';
 import { createBrowserStorage, type CredentialStorage } from './storage';
+import { dismissToast, showToast } from '../toast/toastStore';
 
 const EMPTY_ITEMS: Item[] = [];
 
@@ -89,6 +90,8 @@ export class SessionClient {
     private itemHandlers = new Map<string, Set<ItemsHandler>>();
     private pendingPermissions = new Map<string, PermissionEvent>();
     private permissionHandlers = new Map<string, Set<PermissionHandler>>();
+    /** Fires only when a NEW permission request lands (not when one is cleared). */
+    private permissionRequestedHandlers = new Set<(sessionId: string, perm: PermissionEvent) => void>();
     private replayRpcCounter = 0;
     private lastIncomingAt = 0;
     private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -256,6 +259,14 @@ export class SessionClient {
         };
     }
 
+    /** Fires whenever a fresh permission-request event lands for ANY session.
+     *  Use this for global side effects (toast, badge counter) — for the
+     *  active-session modal, use `onPermissionChange(sid, ...)` instead. */
+    onPermissionRequested(handler: (sessionId: string, perm: PermissionEvent) => void): () => void {
+        this.permissionRequestedHandlers.add(handler);
+        return () => { this.permissionRequestedHandlers.delete(handler); };
+    }
+
     /** Drop the cached pending permission for a session. Callers do this after
      *  responding (the agent doesn't echo a "request resolved" event). */
     clearPendingPermission(sessionId: string): void {
@@ -369,6 +380,9 @@ export class SessionClient {
                     ? 'Mixed content: page is HTTPS but endpoint is ws://. Use wss:// or open over HTTP.'
                     : 'WebSocket connection failed — check that the CLI server is reachable.';
                 this.setStatus('error');
+                // Same key as the server-rejection branch — repeated reconnect
+                // failures replace the existing toast instead of stacking.
+                showToast(this.lastErrorReason, { kind: 'error', key: 'ws-error' });
             };
         } catch {
             this.ws = null;
@@ -455,6 +469,7 @@ export class SessionClient {
                 this.closed = true;
                 this.ws?.close();
                 this.setStatus('error');
+                showToast(this.lastErrorReason, { kind: 'error', key: 'ws-error' });
                 break;
         }
     }
@@ -493,6 +508,8 @@ export class SessionClient {
             // had their `ensureBootstrapped` short-circuit. Retry them now
             // that the connection is live.
             if (status === 'connected') {
+                // Connection restored — clear any lingering ws-error toast.
+                dismissToast('ws-error');
                 for (const sid of this.itemHandlers.keys()) {
                     if (!this.bootstrappedSids.has(sid)) void this.ensureBootstrapped(sid);
                 }
@@ -530,8 +547,10 @@ export class SessionClient {
         this.processedSeqs.set(sessionId, seq);
 
         if ((payload as { type?: string }).type === 'permission-request') {
-            this.pendingPermissions.set(sessionId, payload as PermissionEvent);
+            const perm = payload as PermissionEvent;
+            this.pendingPermissions.set(sessionId, perm);
             this.emitPermission(sessionId);
+            this.permissionRequestedHandlers.forEach((h) => h(sessionId, perm));
             return;
         }
 
