@@ -28,7 +28,7 @@ export function ConnectScreen() {
             if (status === 'connected') {
                 unsub?.();
                 setResuming(false);
-                navigate('/chat');
+                navigate('/sessions');
             } else if (status === 'error') {
                 unsub?.();
                 setResuming(false);
@@ -74,7 +74,7 @@ export function ConnectScreen() {
             if (status === 'connected') {
                 unsub?.();
                 setConnecting(false);
-                navigate('/chat');
+                navigate('/sessions');
             } else if (status === 'error') {
                 unsub?.();
                 setConnecting(false);

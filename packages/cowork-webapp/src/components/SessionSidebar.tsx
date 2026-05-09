@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, X } from 'lucide-react';
+import { Pencil, Plus, X } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { uid } from '../session/events';
+import { loadNames, saveName } from '../session/nameStore';
+import { busyLabel, defaultName } from '../session/displayHelpers';
 import { Modal } from './Modal';
 import { NewSessionModal } from './NewSessionModal';
 
@@ -20,8 +22,16 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
     const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
     const [newSessionOpen, setNewSessionOpen] = useState(false);
+    const [names, setNames] = useState<Record<string, string>>(loadNames);
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editingValue, setEditingValue] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => sessionClient.onSessionsChange(setSessions), []);
+
+    useEffect(() => {
+        if (editingId) inputRef.current?.focus();
+    }, [editingId]);
 
     const goto = useCallback((path: string) => {
         navigate(path);
@@ -44,9 +54,28 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
         }
     }, [pendingClose, activeSessionId, goto]);
 
-    const requestClose = useCallback((s: ChatSessionMeta) => {
-        setPendingClose({ sessionId: s.id, label: `${s.tool} · ${s.id.slice(0, 8)}` });
-    }, []);
+    const requestClose = useCallback((s: ChatSessionMeta, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setPendingClose({ sessionId: s.id, label: names[s.id] ?? defaultName(s) });
+    }, [names]);
+
+    const startEdit = useCallback((s: ChatSessionMeta, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setEditingId(s.id);
+        setEditingValue(names[s.id] ?? defaultName(s));
+    }, [names]);
+
+    const commitEdit = useCallback(() => {
+        if (!editingId) return;
+        saveName(editingId, editingValue);
+        setNames(loadNames());
+        setEditingId(null);
+    }, [editingId, editingValue]);
+
+    const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
+        if (e.key === 'Escape') { setEditingId(null); }
+    }, [commitEdit]);
 
     return (
         <>
@@ -72,31 +101,64 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
                     {sessions.length === 0 && (
                         <div className="sidebar-empty">暂无会话</div>
                     )}
-                    {sessions.map((s) => (
-                        <div
-                            key={s.id}
-                            className={`sidebar-item${s.id === activeSessionId ? ' active' : ''}`}
-                        >
-                            <button
-                                type="button"
-                                className="sidebar-item-main"
-                                onClick={() => goto(`/sessions/${s.id}`)}
+                    {sessions.map((s) => {
+                        const isEditing = editingId === s.id;
+                        const name = names[s.id] ?? defaultName(s);
+                        const busy = busyLabel(s);
+                        return (
+                            <div
+                                key={s.id}
+                                className={`sidebar-item${s.id === activeSessionId ? ' active' : ''}${isEditing ? ' sidebar-item-editing' : ''}`}
                             >
-                                <span className={`sidebar-tool tool-${s.tool}`}>{s.tool}</span>
-                                <span className="sidebar-id">{s.id.slice(0, 8)}</span>
-                                {s.model && <span className="sidebar-model">{s.model}</span>}
-                            </button>
-                            <button
-                                type="button"
-                                className="sidebar-close"
-                                onClick={() => requestClose(s)}
-                                aria-label={`关闭会话 ${s.id.slice(0, 8)}`}
-                                title="关闭会话"
-                            >
-                                <X size={14} />
-                            </button>
-                        </div>
-                    ))}
+                                <button
+                                    type="button"
+                                    className="sidebar-item-main"
+                                    onClick={() => !isEditing && goto(`/sessions/${s.id}`)}
+                                >
+                                    <span className={`sidebar-tool tool-${s.tool}`}>{s.tool}</span>
+                                    {isEditing ? (
+                                        <input
+                                            ref={inputRef}
+                                            className="sidebar-name-input"
+                                            value={editingValue}
+                                            onChange={e => setEditingValue(e.target.value)}
+                                            onKeyDown={handleEditKeyDown}
+                                            onBlur={commitEdit}
+                                            onClick={e => e.stopPropagation()}
+                                            maxLength={40}
+                                        />
+                                    ) : (
+                                        <span className="sidebar-name">{name}</span>
+                                    )}
+                                    {busy && !isEditing && (
+                                        <span className="sidebar-busy-dot" aria-label="运行中" title={busy} />
+                                    )}
+                                </button>
+                                {!isEditing && (
+                                    <div className="sidebar-actions">
+                                        <button
+                                            type="button"
+                                            className="sidebar-action-btn"
+                                            onClick={(e) => startEdit(s, e)}
+                                            aria-label={`重命名 ${name}`}
+                                            title="重命名"
+                                        >
+                                            <Pencil size={12} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="sidebar-action-btn sidebar-action-btn-danger"
+                                            onClick={(e) => requestClose(s, e)}
+                                            aria-label={`关闭会话 ${name}`}
+                                            title="关闭会话"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
 
                 <div className="sidebar-foot">

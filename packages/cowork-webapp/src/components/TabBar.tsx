@@ -1,8 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Home, MessagesSquare, Settings } from 'lucide-react';
+import { MessagesSquare, Settings } from 'lucide-react';
 
 const TABS = [
-    { path: '/home', label: '首页', Icon: Home },
     { path: '/sessions', label: '会话', Icon: MessagesSquare },
     { path: '/settings', label: '设置', Icon: Settings },
 ] as const;

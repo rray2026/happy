@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, X, Square } from 'lucide-react';
 import { sessionClient } from '../session';
-import type { ChatSessionMeta, ClaudeEvent, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
-import { eventToItems, mergeItems, uid } from '../session/events';
+import type { ChatSessionMeta, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
+import { uid } from '../session/events';
 import { loadNames } from '../session/nameStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
@@ -124,10 +124,11 @@ export function ChatScreen() {
 
     const [status, setStatus] = useState<SocketStatus>(sessionClient.getStatus());
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
-    const [items, setItems] = useState<Item[]>([]);
+    const [items, setItems] = useState<Item[]>(() => sessionClient.getItems(sessionId));
     const [input, setInput] = useState('');
-    const [thinking, setThinking] = useState(false);
-    const [permission, setPermission] = useState<PermissionEvent | null>(null);
+    const [permission, setPermission] = useState<PermissionEvent | null>(
+        () => sessionClient.getPendingPermission(sessionId),
+    );
     const [logsOpen, setLogsOpen] = useState(false);
     const [logLines, setLogLines] = useState<string[]>([]);
     const [logPath, setLogPath] = useState('');
@@ -145,47 +146,18 @@ export function ChatScreen() {
     const logsBottomRef = useRef<HTMLDivElement>(null);
     const messagesRef = useRef<HTMLDivElement>(null);
     const lastScrollTopRef = useRef(0);
-    // Keyed by sessionId via the parent route wrapper — seenSeqs initialises fresh
-    // on every mount, so no reset effect is needed.
-    const seenSeqs = useRef<Set<number>>(new Set());
 
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
         const unsubSessions = sessionClient.onSessionsChange(setSessions);
-        const unsubMsg = sessionClient.onMessage((sid, payload, seq) => {
-            if (sid !== sessionId) return;
-            if (seenSeqs.current.has(seq)) return;
-            seenSeqs.current.add(seq);
-            if ((payload as PermissionEvent).type === 'permission-request') {
-                setPermission(payload as PermissionEvent);
-                return;
-            }
-            const event = payload as ClaudeEvent;
-            if (event.type === 'result') setThinking(false);
-            const newItems = eventToItems(event);
-            if (!newItems.length) return;
-            setItems(prev => mergeItems(prev, newItems));
-        });
-        return () => { unsubStatus(); unsubSessions(); unsubMsg(); };
-    }, [sessionId]);
-
-    useEffect(() => {
-        if (!sessionId) return;
-        let cancelled = false;
-        const requestReplay = () => {
-            if (cancelled) return;
-            sessionClient
-                .rpc(uid(), 'session.replay', { sessionId, fromSeq: -1 })
-                .catch(() => {});
+        const unsubItems = sessionClient.onItemsChange(sessionId, setItems);
+        const unsubPerm = sessionClient.onPermissionChange(sessionId, setPermission);
+        return () => {
+            unsubStatus();
+            unsubSessions();
+            unsubItems();
+            unsubPerm();
         };
-        if (sessionClient.getStatus() === 'connected') {
-            requestReplay();
-            return () => { cancelled = true; };
-        }
-        const unsub = sessionClient.onStatusChange((s) => {
-            if (s === 'connected') { unsub(); requestReplay(); }
-        });
-        return () => { cancelled = true; unsub(); };
     }, [sessionId]);
 
     // Auto-scroll to bottom only when not scrolled up
@@ -193,7 +165,7 @@ export function ChatScreen() {
         if (!showScrollBtn) {
             bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [items, thinking, showScrollBtn]);
+    }, [items, showScrollBtn]);
 
     useEffect(() => {
         if (!drawerOpen) return;
@@ -228,10 +200,7 @@ export function ChatScreen() {
     }, []);
 
     const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
-    // Effective busy: server-reported authoritative state OR'd with the local
-    // optimistic flag (which bridges the ws round-trip after a fresh send).
-    // Legacy agents that don't report `busy` fall back to the local flag.
-    const isBusy = thinking || (activeSession?.busy ?? false);
+    const isBusy = activeSession?.busy ?? false;
     const pendingCount = activeSession?.pending ?? 0;
 
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -247,9 +216,8 @@ export function ChatScreen() {
         const text = input.trim();
         if (!text || status !== 'connected' || !sessionId) return;
         sessionClient.sendInput(sessionId, text);
+        sessionClient.appendOptimisticUser(sessionId, text);
         setInput('');
-        setThinking(true);
-        setItems(prev => [...prev, { kind: 'user', text, id: uid(), timestamp: Date.now() }]);
         const el = inputRef.current;
         if (el) el.style.height = 'auto';
         setTimeout(() => inputRef.current?.focus(), 0);
@@ -274,7 +242,7 @@ export function ChatScreen() {
         sessionClient
             .rpc(uid(), 'session.permissionResponse', { sessionId, permissionId: permission.permissionId, approved })
             .catch(() => {});
-        setPermission(null);
+        sessionClient.clearPendingPermission(sessionId);
     }, [permission, sessionId]);
 
     const handleOpenLogs = useCallback(async () => {

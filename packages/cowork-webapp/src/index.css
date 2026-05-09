@@ -79,6 +79,9 @@
   --sidebar-w: 280px;
   --header-h: 52px;
   --input-bar-h: 56px;
+  --tab-bar-h: 56px;
+  /* On desktop the tab bar moves to the top and goes slimmer. */
+  --tab-bar-h-desktop: 48px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -1253,50 +1256,81 @@ button:focus:not(:focus-visible) { outline: none; }
 .sidebar-tool.tool-claude { color: #c47f00; border-color: color-mix(in srgb, #c47f00 40%, var(--border)); }
 .sidebar-tool.tool-gemini { color: #2b7cff; border-color: color-mix(in srgb, #2b7cff 40%, var(--border)); }
 
-.sidebar-id {
-  font-family: var(--mono);
-  font-size: var(--fs-xs);
+.sidebar-name {
+  flex: 1;
+  font-size: var(--fs-sm);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
-.sidebar-model {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sidebar-name-input {
+  flex: 1;
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  padding: 2px var(--s-2);
+  outline: none;
+  min-width: 0;
 }
 
-.sidebar-close {
+.sidebar-busy-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: session-row-busy-pulse 1.2s ease-in-out infinite;
+}
+
+.sidebar-item-editing { background: var(--surface); }
+
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: var(--s-1);
+  flex-shrink: 0;
+}
+
+.sidebar-action-btn {
   background: transparent;
   border: none;
   color: var(--text-tertiary);
   cursor: pointer;
   padding: 0;
   border-radius: var(--r-sm);
-  opacity: 0;
-  transition: opacity var(--t-fast), background var(--t-fast), color var(--t-fast);
-  align-self: center;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--t-fast), background var(--t-fast), color var(--t-fast);
 }
 
-.sidebar-item:hover .sidebar-close,
-.sidebar-item.active .sidebar-close { opacity: 1; }
-.sidebar-close:hover {
+.sidebar-item:hover .sidebar-action-btn,
+.sidebar-item.active .sidebar-action-btn,
+.sidebar-action-btn:focus { opacity: 1; }
+
+.sidebar-action-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-action-btn-danger:hover {
   background: color-mix(in srgb, var(--error) 18%, transparent);
   color: var(--error);
 }
 
-/* On touch devices, always show close button */
+/* On touch devices, always show action buttons */
 @media (max-width: 768px) {
-  .sidebar-close { opacity: 0.6; }
+  .sidebar-action-btn { opacity: 0.6; }
 }
 
 .sidebar-foot {
@@ -1966,12 +2000,13 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* ── Tab Bar ─────────────────────────────────────────────────────────────── */
 
+/* Mobile: bottom tab bar (icons stacked above labels). */
 .tab-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  height: calc(56px + var(--safe-bottom));
+  height: calc(var(--tab-bar-h) + var(--safe-bottom));
   background: var(--surface);
   border-top: 1px solid var(--border);
   display: flex;
@@ -1981,9 +2016,18 @@ button:focus:not(:focus-visible) { outline: none; }
   -webkit-backdrop-filter: blur(12px);
 }
 
-/* Desktop: hide tab bar */
+/* Desktop: same component, top horizontal nav. */
 @media (min-width: 769px) {
-  .tab-bar { display: none; }
+  .tab-bar {
+    bottom: auto;
+    top: 0;
+    height: var(--tab-bar-h-desktop);
+    padding: 0 var(--s-4);
+    padding-bottom: 0;
+    border-top: none;
+    border-bottom: 1px solid var(--border);
+    gap: var(--s-1);
+  }
 }
 
 .tab-bar-item {
@@ -2015,16 +2059,36 @@ button:focus:not(:focus-visible) { outline: none; }
   line-height: 1;
 }
 
-/* Pages with tab bar: reserve bottom space for the bar */
+@media (min-width: 769px) {
+  .tab-bar-item {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: var(--s-2);
+    padding: 0 var(--s-3);
+    border-radius: var(--r-md);
+  }
+  .tab-bar-item:hover:not(.active) {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+  .tab-bar-label {
+    font-size: var(--fs-sm);
+  }
+}
+
+/* Pages with tab bar: reserve space for the bar (bottom on mobile, top on
+ * desktop where the bar moves to the top of the viewport). */
 .tab-page {
-  padding-bottom: calc(56px + var(--safe-bottom));
+  padding-bottom: calc(var(--tab-bar-h) + var(--safe-bottom));
   min-height: 100vh;
   min-height: 100dvh;
 }
 
-/* Desktop: no extra bottom padding */
 @media (min-width: 769px) {
-  .tab-page { padding-bottom: 0; }
+  .tab-page {
+    padding-bottom: 0;
+    padding-top: var(--tab-bar-h-desktop);
+  }
 }
 
 /* ── Session list page (WeChat style) ────────────────────────────────────── */
@@ -2052,6 +2116,10 @@ button:focus:not(:focus-visible) { outline: none; }
   top: 0;
   z-index: 5;
   min-height: calc(var(--header-h) + var(--safe-top));
+}
+
+@media (min-width: 769px) {
+  .session-list-header { top: var(--tab-bar-h-desktop); }
 }
 
 .session-list-title {
@@ -2188,7 +2256,14 @@ button:focus:not(:focus-visible) { outline: none; }
   min-width: 0;
 }
 
-.session-row-edit-btn {
+.session-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex-shrink: 0;
+}
+
+.session-row-icon-btn {
   flex-shrink: 0;
   width: 32px;
   height: 32px;
@@ -2201,13 +2276,36 @@ button:focus:not(:focus-visible) { outline: none; }
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity var(--t-fast), background var(--t-fast);
+  transition: opacity var(--t-fast), background var(--t-fast), color var(--t-fast);
 }
-.session-row:hover .session-row-edit-btn,
-.session-row-edit-btn:focus { opacity: 1; }
+.session-row-icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+.session-row-icon-btn-danger:hover { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); }
+.session-row:hover .session-row-icon-btn,
+.session-row-icon-btn:focus { opacity: 1; }
 /* Always visible on touch devices */
 @media (hover: none) {
-  .session-row-edit-btn { opacity: 0.45; }
+  .session-row-icon-btn { opacity: 0.45; }
+}
+
+.session-row-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--sans);
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  font-weight: 500;
+}
+.session-row-busy-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  animation: session-row-busy-pulse 1.2s ease-in-out infinite;
+}
+@keyframes session-row-busy-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.25); }
 }
 
 /* ── Settings page ───────────────────────────────────────────────────────── */
@@ -2230,6 +2328,10 @@ button:focus:not(:focus-visible) { outline: none; }
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+@media (min-width: 769px) {
+  .settings-header { top: var(--tab-bar-h-desktop); }
 }
 
 .settings-title {
@@ -2308,79 +2410,6 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--error);
 }
 .settings-item-danger .settings-item-icon { color: var(--error); }
-
-/* ── Home page ───────────────────────────────────────────────────────────── */
-
-.home-page {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg);
-  min-height: 100vh;
-  min-height: 100dvh;
-}
-
-.home-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--s-3);
-  text-align: center;
-}
-
-.home-logo { font-size: 56px; line-height: 1; }
-.home-title { font-size: var(--fs-xl); font-weight: 700; margin: 0; letter-spacing: -0.5px; }
-.home-status {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-.home-status-label { font-size: var(--fs-sm); color: var(--text-secondary); }
-
-.home-actions {
-  display: flex;
-  gap: var(--s-3);
-  margin-top: var(--s-3);
-}
-
-.home-action-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-4) var(--s-5);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  cursor: pointer;
-  color: var(--text-primary);
-  min-width: 110px;
-  transition: background var(--t-fast), opacity var(--t-fast);
-  position: relative;
-}
-.home-action-btn:hover:not(:disabled) { background: var(--surface-hover); }
-.home-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.home-action-icon { color: var(--accent); }
-.home-action-label { font-size: var(--fs-sm); font-weight: 500; }
-
-.home-action-badge {
-  position: absolute;
-  top: var(--s-2);
-  right: var(--s-2);
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  background: var(--accent);
-  color: #fff;
-  border-radius: var(--r-full);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 18px;
-  text-align: center;
-}
 
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 

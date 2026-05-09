@@ -1,27 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bot, Pencil, RefreshCw } from 'lucide-react';
+import { Plus, Bot, Pencil, RefreshCw, X } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { NewSessionModal } from './NewSessionModal';
+import { Modal } from './Modal';
+import { uid } from '../session/events';
 import { loadNames, saveName } from '../session/nameStore';
-
-function formatTime(ms: number): string {
-    const now = Date.now();
-    const diff = now - ms;
-    const d = new Date(ms);
-    if (diff < 60_000) return '刚刚';
-    if (diff < 3600_000) return `${Math.floor(diff / 60_000)}分钟前`;
-    const today = new Date();
-    if (d.toDateString() === today.toDateString()) {
-        return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    }
-    return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-}
-
-function defaultName(s: ChatSessionMeta): string {
-    return (s.tool === 'claude' ? 'Claude' : 'Gemini') + (s.model ? ` · ${s.model}` : '');
-}
+import { busyLabel, defaultName, formatSessionTime } from '../session/displayHelpers';
 
 function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
     return (
@@ -31,6 +17,8 @@ function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
     );
 }
 
+type PendingClose = { sessionId: string; label: string };
+
 export function SessionListPage() {
     const navigate = useNavigate();
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
@@ -39,6 +27,7 @@ export function SessionListPage() {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editingValue, setEditingValue] = useState('');
     const [refreshing, setRefreshing] = useState(false);
+    const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => sessionClient.onSessionsChange(setSessions), []);
@@ -88,6 +77,18 @@ export function SessionListPage() {
         if (e.key === 'Escape') { setEditingId(null); }
     }, [commitEdit]);
 
+    const requestClose = useCallback((s: ChatSessionMeta, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setPendingClose({ sessionId: s.id, label: names[s.id] ?? defaultName(s) });
+    }, [names]);
+
+    const confirmClose = useCallback(async () => {
+        if (!pendingClose) return;
+        const { sessionId } = pendingClose;
+        setPendingClose(null);
+        await sessionClient.rpc(uid(), 'session.close', { sessionId }).catch(() => {});
+    }, [pendingClose]);
+
     return (
         <div className="session-list-page tab-page">
             <div className="session-list-header">
@@ -123,7 +124,8 @@ export function SessionListPage() {
                 ) : (
                     sessions.map((s) => {
                         const isEditing = editingId === s.id;
-                        const displayName = names[s.id] ?? defaultName(s);
+                        const name = names[s.id] ?? defaultName(s);
+                        const busy = busyLabel(s);
                         return (
                             <div
                                 key={s.id}
@@ -146,22 +148,43 @@ export function SessionListPage() {
                                             />
                                         ) : (
                                             <>
-                                                <span className="session-row-name">{displayName}</span>
-                                                <span className="session-row-time">{formatTime(s.createdAt)}</span>
+                                                <span className="session-row-name">{name}</span>
+                                                <span className="session-row-time">{formatSessionTime(s.createdAt)}</span>
                                             </>
                                         )}
                                     </div>
-                                    <div className="session-row-sub">{s.cwd || s.id.slice(0, 12)}</div>
+                                    <div className="session-row-sub">
+                                        {busy ? (
+                                            <span className="session-row-busy">
+                                                <span className="session-row-busy-dot" aria-hidden="true" />
+                                                {busy}
+                                            </span>
+                                        ) : (
+                                            s.cwd || s.id.slice(0, 12)
+                                        )}
+                                    </div>
                                 </div>
                                 {!isEditing && (
-                                    <button
-                                        type="button"
-                                        className="session-row-edit-btn"
-                                        onClick={e => startEdit(s, e)}
-                                        aria-label="重命名"
-                                    >
-                                        <Pencil size={14} />
-                                    </button>
+                                    <div className="session-row-actions">
+                                        <button
+                                            type="button"
+                                            className="session-row-icon-btn"
+                                            onClick={(e) => startEdit(s, e)}
+                                            aria-label="重命名"
+                                            title="重命名"
+                                        >
+                                            <Pencil size={14} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="session-row-icon-btn session-row-icon-btn-danger"
+                                            onClick={(e) => requestClose(s, e)}
+                                            aria-label="关闭会话"
+                                            title="关闭会话"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                         );
@@ -174,6 +197,30 @@ export function SessionListPage() {
                 onClose={() => setNewSessionOpen(false)}
                 onCreated={handleSessionCreated}
             />
+
+            <Modal
+                open={!!pendingClose}
+                title="关闭这个会话？"
+                onClose={() => setPendingClose(null)}
+                size="sm"
+            >
+                <div className="modal-body">
+                    <p className="confirm-text">
+                        对应的 AI 进程会被终止，未发送的消息会丢失。
+                    </p>
+                    {pendingClose && (
+                        <p className="confirm-hint">{pendingClose.label}</p>
+                    )}
+                    <div className="modal-actions">
+                        <button type="button" className="btn btn-secondary" onClick={() => setPendingClose(null)}>
+                            取消
+                        </button>
+                        <button type="button" className="btn btn-danger" onClick={confirmClose}>
+                            关闭会话
+                        </button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 }

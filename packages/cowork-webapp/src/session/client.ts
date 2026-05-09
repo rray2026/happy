@@ -1,13 +1,19 @@
 import type {
     ChatSessionMeta,
+    ClaudeEvent,
     DirectQRPayload,
+    Item,
+    ItemsHandler,
     MessageHandler,
+    PermissionEvent,
+    PermissionHandler,
     RpcResponse,
     SessionsHandler,
     SocketStatus,
     StatusHandler,
     StoredCredentials,
 } from '../types';
+import { eventToItems, mergeItems, uid } from './events';
 import { createBrowserStorage, type CredentialStorage } from './storage';
 
 export type WebSocketFactory = (url: string) => WebSocket;
@@ -66,6 +72,24 @@ export class SessionClient {
     private lastSeqs: Record<string, number> = {};
     private sessions: ChatSessionMeta[] = [];
     private refreshRpcCounter = 0;
+
+    // Per-chat-session caches. Lifetime is the page session — wiped only when
+    // the connection identity changes (fresh QR, or a different stored
+    // credential). Same-credential reconnects keep them warm so re-mounting a
+    // ChatScreen doesn't re-fetch full history every time.
+    private items = new Map<string, Item[]>();
+    /** Highest seq we've folded into `items` for each chat session — used to
+     *  drop redundant events that arrive on replay after the live stream has
+     *  already advanced past them. */
+    private processedSeqs = new Map<string, number>();
+    /** Sids for which we've already issued an explicit `session.replay` this
+     *  page session. Idempotency latch — keeps reactive subscribers from
+     *  triggering a replay each time they re-subscribe. */
+    private bootstrappedSids = new Set<string>();
+    private itemHandlers = new Map<string, Set<ItemsHandler>>();
+    private pendingPermissions = new Map<string, PermissionEvent>();
+    private permissionHandlers = new Map<string, Set<PermissionHandler>>();
+    private replayRpcCounter = 0;
     private lastIncomingAt = 0;
     private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
     private visibilityHandler: (() => void) | null = null;
@@ -104,6 +128,7 @@ export class SessionClient {
         this.webappPublicKey = webappPublicKey;
         this.lastSeqs = {};
         this.sessions = [];
+        this.clearAllSessionData();
         this.resetDelay();
         this.open();
     }
@@ -121,6 +146,10 @@ export class SessionClient {
         ) {
             return;
         }
+        // Different credential ⇒ a different agent ⇒ caches don't carry over.
+        // Same credential after a drop ⇒ keep them; the welcome's incremental
+        // replay will top them up.
+        const sameAgent = this.storedCredentials?.sessionCredential === creds.sessionCredential;
         this.closed = false;
         this.lastErrorReason = null;
         this.storedCredentials = creds;
@@ -129,6 +158,7 @@ export class SessionClient {
         this.webappPublicKey = creds.webappPublicKey;
         this.lastSeqs = { ...creds.lastSeqs };
         this.sessions = [];
+        if (!sameAgent) this.clearAllSessionData();
         this.resetDelay();
         this.open();
     }
@@ -186,6 +216,68 @@ export class SessionClient {
     }
     getSessions(): ChatSessionMeta[] { return this.sessions; }
 
+    // ── Per-chat-session data (items + permission) ────────────────────────────
+
+    getItems(sessionId: string): Item[] {
+        return this.items.get(sessionId) ?? [];
+    }
+
+    onItemsChange(sessionId: string, handler: ItemsHandler): () => void {
+        let handlers = this.itemHandlers.get(sessionId);
+        if (!handlers) {
+            handlers = new Set();
+            this.itemHandlers.set(sessionId, handlers);
+        }
+        handlers.add(handler);
+        handler(this.items.get(sessionId) ?? []);
+        // Lazily backfill: the welcome's incremental replay only carries
+        // events past `lastSeqs[sid]`, so a freshly-mounted ChatScreen on
+        // a session that already has history will see an empty list. Issue
+        // a one-shot full replay here so the cache fills in.
+        void this.ensureBootstrapped(sessionId);
+        return () => {
+            handlers.delete(handler);
+            if (handlers.size === 0) this.itemHandlers.delete(sessionId);
+        };
+    }
+
+    getPendingPermission(sessionId: string): PermissionEvent | null {
+        return this.pendingPermissions.get(sessionId) ?? null;
+    }
+
+    onPermissionChange(sessionId: string, handler: PermissionHandler): () => void {
+        let handlers = this.permissionHandlers.get(sessionId);
+        if (!handlers) {
+            handlers = new Set();
+            this.permissionHandlers.set(sessionId, handlers);
+        }
+        handlers.add(handler);
+        handler(this.pendingPermissions.get(sessionId) ?? null);
+        return () => {
+            handlers.delete(handler);
+            if (handlers.size === 0) this.permissionHandlers.delete(sessionId);
+        };
+    }
+
+    /** Drop the cached pending permission for a session. Callers do this after
+     *  responding (the agent doesn't echo a "request resolved" event). */
+    clearPendingPermission(sessionId: string): void {
+        if (!this.pendingPermissions.has(sessionId)) return;
+        this.pendingPermissions.delete(sessionId);
+        this.emitPermission(sessionId);
+    }
+
+    /** Append an optimistic local user message into the items cache. The
+     *  authoritative echo from the agent is deduped by mergeItems' user-text
+     *  rule, so the visible order remains stable. */
+    appendOptimisticUser(sessionId: string, text: string): void {
+        const next = mergeItems(this.items.get(sessionId) ?? [], [
+            { kind: 'user', text, id: uid(), timestamp: Date.now() },
+        ]);
+        this.items.set(sessionId, next);
+        this.emitItems(sessionId);
+    }
+
     /**
      * Pull the authoritative session list from the agent and update the local
      * cache. Use this as a recovery path when the cached list might be out of
@@ -214,6 +306,7 @@ export class SessionClient {
 
     clearCredentials(): void {
         this.storage.clearCredentials();
+        this.clearAllSessionData();
     }
 
     /**
@@ -320,9 +413,15 @@ export class SessionClient {
                 break;
             }
             case 'sessions': {
-                this.sessions = Array.isArray(m['sessions'])
+                const incoming = Array.isArray(m['sessions'])
                     ? (m['sessions'] as ChatSessionMeta[])
                     : [];
+                // GC per-session caches for sids the agent dropped (close).
+                const live = new Set(incoming.map((s) => s.id));
+                for (const sid of [...this.items.keys()]) {
+                    if (!live.has(sid)) this.dropSessionData(sid);
+                }
+                this.sessions = incoming;
                 this.emitSessions();
                 break;
             }
@@ -339,6 +438,7 @@ export class SessionClient {
                         this.storage.saveCredentials(this.storedCredentials);
                     }
                 }
+                if (sid) this.processIntoCache(sid, seq, m['payload']);
                 this.messageHandlers.forEach((h) => h(sid, m['payload'], seq));
                 break;
             }
@@ -393,11 +493,117 @@ export class SessionClient {
         if (this.currentStatus !== status) {
             this.currentStatus = status;
             this.statusHandlers.forEach(h => h(status));
+            // Late bootstrap: subscribers that registered while disconnected
+            // had their `ensureBootstrapped` short-circuit. Retry them now
+            // that the connection is live.
+            if (status === 'connected') {
+                for (const sid of this.itemHandlers.keys()) {
+                    if (!this.bootstrappedSids.has(sid)) void this.ensureBootstrapped(sid);
+                }
+            }
         }
     }
 
     private emitSessions(): void {
         this.sessionsHandlers.forEach((h) => h(this.sessions));
+    }
+
+    private emitItems(sessionId: string): void {
+        const handlers = this.itemHandlers.get(sessionId);
+        if (!handlers) return;
+        const items = this.items.get(sessionId) ?? [];
+        handlers.forEach((h) => h(items));
+    }
+
+    private emitPermission(sessionId: string): void {
+        const handlers = this.permissionHandlers.get(sessionId);
+        if (!handlers) return;
+        const perm = this.pendingPermissions.get(sessionId) ?? null;
+        handlers.forEach((h) => h(perm));
+    }
+
+    /**
+     * Fold a single inbound `message` payload into the per-session items
+     * cache. Permission requests bypass the cache and surface separately.
+     * Replays past `processedSeqs[sid]` are dropped.
+     */
+    private processIntoCache(sessionId: string, seq: number, payload: unknown): void {
+        if (!payload || typeof payload !== 'object') return;
+        const processed = this.processedSeqs.get(sessionId) ?? -1;
+        if (seq <= processed) return;
+        this.processedSeqs.set(sessionId, seq);
+
+        if ((payload as { type?: string }).type === 'permission-request') {
+            this.pendingPermissions.set(sessionId, payload as PermissionEvent);
+            this.emitPermission(sessionId);
+            return;
+        }
+
+        const newItems = eventToItems(payload as ClaudeEvent);
+        if (!newItems.length) return;
+        const next = mergeItems(this.items.get(sessionId) ?? [], newItems);
+        this.items.set(sessionId, next);
+        this.emitItems(sessionId);
+    }
+
+    /**
+     * Trigger a one-shot full replay for `sessionId` so its items cache is
+     * complete. Idempotent — once requested, stays latched until the cache is
+     * explicitly dropped (session closed, or credential change).
+     */
+    private async ensureBootstrapped(sessionId: string): Promise<void> {
+        if (this.bootstrappedSids.has(sessionId)) return;
+        if (this.currentStatus !== 'connected') return;
+        // Nothing to backfill if the session has no events yet — the live
+        // stream alone will populate the cache as soon as the user types.
+        const meta = this.sessions.find((s) => s.id === sessionId);
+        if (meta && meta.currentSeq < 0) {
+            this.bootstrappedSids.add(sessionId);
+            return;
+        }
+        this.bootstrappedSids.add(sessionId);
+        // The welcome's replay only carries events past the persisted
+        // `lastSeqs[sid]`. To get the full picture, wipe the partial cache
+        // first so the upcoming replay rebuilds it without seq-dedup dropping
+        // the older entries. Costs one frame of "empty list" flicker; only
+        // happens once per session per page session.
+        this.items.delete(sessionId);
+        this.processedSeqs.delete(sessionId);
+        this.emitItems(sessionId);
+
+        const id = `replay-${++this.replayRpcCounter}`;
+        try {
+            const res = await this.rpc(id, 'session.replay', { sessionId, fromSeq: -1 });
+            if (res.error) this.bootstrappedSids.delete(sessionId);
+        } catch {
+            this.bootstrappedSids.delete(sessionId);
+        }
+    }
+
+    private dropSessionData(sessionId: string): void {
+        const hadItems = this.items.delete(sessionId);
+        this.processedSeqs.delete(sessionId);
+        this.bootstrappedSids.delete(sessionId);
+        const hadPerm = this.pendingPermissions.delete(sessionId);
+        if (hadItems) this.emitItems(sessionId);
+        if (hadPerm) this.emitPermission(sessionId);
+    }
+
+    private clearAllSessionData(): void {
+        const sids = new Set<string>([
+            ...this.items.keys(),
+            ...this.pendingPermissions.keys(),
+        ]);
+        this.items.clear();
+        this.processedSeqs.clear();
+        this.bootstrappedSids.clear();
+        this.pendingPermissions.clear();
+        // Notify any subscriber whose session just got wiped, so they observe
+        // an empty list / no permission instead of stale state.
+        for (const sid of sids) {
+            this.emitItems(sid);
+            this.emitPermission(sid);
+        }
     }
 
     /**

@@ -7,6 +7,10 @@ export type MessageHandler = (sessionId: string, payload: unknown, seq: number) 
 export type StatusHandler = (status: SocketStatus) => void;
 /** Fires on initial `welcome` and on any subsequent `sessions` change-notify. */
 export type SessionsHandler = (sessions: ChatSessionMeta[]) => void;
+/** Fires whenever the per-session item list changes (delta merge, replay, optimistic insert). */
+export type ItemsHandler = (items: Item[]) => void;
+/** Fires when the per-session pending permission request changes (set or cleared). */
+export type PermissionHandler = (permission: PermissionEvent | null) => void;
 
 export interface ChatSessionMeta {
     id: string;

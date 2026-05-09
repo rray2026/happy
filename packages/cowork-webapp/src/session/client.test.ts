@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionClient } from './client';
 import { createMemoryStorage } from './storage';
-import type { DirectQRPayload, SocketStatus, StoredCredentials } from '../types';
+import type { DirectQRPayload, PermissionEvent, SocketStatus, StoredCredentials } from '../types';
 
 // ── Fake WebSocket ────────────────────────────────────────────────────────────
 
@@ -267,6 +267,190 @@ describe('SessionClient: refreshSessions', () => {
         const result = await client.refreshSessions();
         expect(result).toEqual([]);
         expect(sockets).toHaveLength(0);
+    });
+});
+
+describe('SessionClient: per-session items cache', () => {
+    function connectedWithSession(sid: string, currentSeq = -1) {
+        const setup = makeClient({ creds: storedCreds });
+        setup.client.connectFromStored(storedCreds);
+        setup.sockets[0].triggerOpen();
+        setup.sockets[0].triggerMessage({
+            type: 'welcome',
+            sessions: [{ id: sid, tool: 'claude', model: null, cwd: '/tmp', createdAt: 1, currentSeq }],
+        });
+        return setup;
+    }
+
+    it('folds incoming user/assistant events into per-session items', () => {
+        const { client, sockets } = connectedWithSession('chat-a');
+        const seen: number[] = [];
+        client.onItemsChange('chat-a', (items) => seen.push(items.length));
+
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: { type: 'user', message: { role: 'user', content: 'hi' } },
+        });
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 1,
+            payload: {
+                type: 'assistant',
+                message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+            },
+        });
+
+        const items = client.getItems('chat-a');
+        expect(items.map((i) => i.kind)).toEqual(['user', 'assistant']);
+        expect(seen.at(-1)).toBe(2);
+    });
+
+    it('drops events with stale seq (replay re-pump)', () => {
+        const { client, sockets } = connectedWithSession('chat-a');
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 5,
+            payload: { type: 'user', message: { role: 'user', content: 'first' } },
+        });
+        // A re-arrival at the same seq must NOT duplicate the user item.
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 5,
+            payload: { type: 'user', message: { role: 'user', content: 'first' } },
+        });
+        // A lower seq (replay overlap) must also be dropped.
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 3,
+            payload: { type: 'user', message: { role: 'user', content: 'older' } },
+        });
+        expect(client.getItems('chat-a').map((i) => i.kind)).toEqual(['user']);
+    });
+
+    it('routes per-session — chat-a events do not bleed into chat-b', () => {
+        const { client, sockets } = makeClient({ creds: storedCreds });
+        client.connectFromStored(storedCreds);
+        sockets[0].triggerOpen();
+        sockets[0].triggerMessage({
+            type: 'welcome',
+            sessions: [
+                { id: 'chat-a', tool: 'claude', model: null, cwd: '/', createdAt: 1, currentSeq: -1 },
+                { id: 'chat-b', tool: 'claude', model: null, cwd: '/', createdAt: 1, currentSeq: -1 },
+            ],
+        });
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: { type: 'user', message: { role: 'user', content: 'a-msg' } },
+        });
+        expect(client.getItems('chat-a')).toHaveLength(1);
+        expect(client.getItems('chat-b')).toHaveLength(0);
+    });
+
+    it('issues session.replay on first subscribe when the session has history', async () => {
+        const { client, sockets } = connectedWithSession('chat-a', /* currentSeq */ 0);
+        client.onItemsChange('chat-a', () => {});
+        // The first outbound frame after subscribe must be the replay rpc.
+        await Promise.resolve();
+        const sent = sockets[0].lastSent!;
+        expect(sent['type']).toBe('rpc');
+        expect(sent['method']).toBe('session.replay');
+        expect(sent['params']).toEqual({ sessionId: 'chat-a', fromSeq: -1 });
+    });
+
+    it('does not replay when the session has no events yet', async () => {
+        const { client, sockets } = connectedWithSession('chat-a', /* currentSeq */ -1);
+        const sentBefore = sockets[0].sent.length;
+        client.onItemsChange('chat-a', () => {});
+        await Promise.resolve();
+        expect(sockets[0].sent.length).toBe(sentBefore);
+    });
+
+    it('GCs items + permission cache for a session that disappears from the list', () => {
+        const { client, sockets } = connectedWithSession('chat-a');
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: { type: 'user', message: { role: 'user', content: 'hi' } },
+        });
+        expect(client.getItems('chat-a')).toHaveLength(1);
+
+        sockets[0].triggerMessage({ type: 'sessions', sessions: [] });
+        expect(client.getItems('chat-a')).toEqual([]);
+    });
+
+    it('keeps caches across same-credential reconnect', () => {
+        const { client, sockets } = connectedWithSession('chat-a');
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: { type: 'user', message: { role: 'user', content: 'hi' } },
+        });
+        expect(client.getItems('chat-a')).toHaveLength(1);
+
+        sockets[0].triggerClose();
+        // Re-open with the same credential
+        sockets[0].triggerOpen?.();
+        // Calling connectFromStored mid-flight is the visible action — it
+        // updates state but should NOT clear the items cache for the same
+        // agent. (We don't dispatch a fresh welcome; just check the cache.)
+        client.connectFromStored(storedCreds);
+        expect(client.getItems('chat-a')).toHaveLength(1);
+    });
+
+    it('clears caches when connecting with a different credential', () => {
+        const { client, sockets } = connectedWithSession('chat-a');
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: { type: 'user', message: { role: 'user', content: 'hi' } },
+        });
+        expect(client.getItems('chat-a')).toHaveLength(1);
+
+        const otherCreds = { ...storedCreds, sessionCredential: 'different' };
+        client.connectFromStored(otherCreds);
+        expect(client.getItems('chat-a')).toEqual([]);
+    });
+
+    it('routes permission-request payloads through onPermissionChange instead of items', () => {
+        const { client, sockets } = connectedWithSession('chat-a');
+        let pending: PermissionEvent | null = null;
+        client.onPermissionChange('chat-a', (p) => { pending = p; });
+
+        sockets[0].triggerMessage({
+            type: 'message',
+            sessionId: 'chat-a',
+            seq: 0,
+            payload: {
+                type: 'permission-request',
+                permissionId: 'perm-1',
+                toolName: 'Bash',
+                input: { command: 'rm -rf' },
+            },
+        });
+        expect(pending).toMatchObject({ type: 'permission-request', permissionId: 'perm-1' });
+        expect(client.getItems('chat-a')).toEqual([]);
+
+        client.clearPendingPermission('chat-a');
+        expect(pending).toBeNull();
+    });
+
+    it('appendOptimisticUser inserts a user item before the agent echoes it back', () => {
+        const { client } = connectedWithSession('chat-a');
+        client.appendOptimisticUser('chat-a', 'hello agent');
+        const items = client.getItems('chat-a');
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({ kind: 'user', text: 'hello agent' });
     });
 });
 
