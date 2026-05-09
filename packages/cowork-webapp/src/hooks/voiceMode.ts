@@ -25,9 +25,13 @@ export interface VoiceModeOptions {
      *  normalizing whitespace/punctuation. Empty = disabled. */
     sendTrigger?: string;
     /** Optional wake-word that, when heard anywhere in an utterance, cancels
-     *  the current TTS readback and aborts the agent's in-flight turn. The
+     *  the current TTS readback (drains the queue + stops the engine). The
      *  transcript itself is discarded. Empty = disabled. */
-    interruptTrigger?: string;
+    stopReadingTrigger?: string;
+    /** Optional wake-word that, when heard anywhere in an utterance, aborts
+     *  the agent's in-flight turn (RPC session.abort). The transcript itself
+     *  is discarded. Empty = disabled. */
+    abortTrigger?: string;
     /** Strip code blocks from TTS output. */
     skipCode?: boolean;
     /** Play a "ping" cue when a tool call appears in the stream. */
@@ -160,7 +164,8 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         ttsRate,
         silenceMs = 2500,
         sendTrigger,
-        interruptTrigger,
+        stopReadingTrigger,
+        abortTrigger,
         skipCode = true,
         toolCue = true,
         onError,
@@ -308,26 +313,31 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             transcriptRef.current = (transcriptRef.current + ' ' + text).trim();
             setLiveTranscript(transcriptRef.current);
 
-            // Interrupt wake-word: appears anywhere in the utterance (not just
-            // tail), drops everything we'd otherwise send, force-cancels TTS,
-            // and aborts the agent's in-flight turn if any. Checked before
-            // sendTrigger so a phrase like "停止 发送" can't accidentally send.
-            if (interruptTrigger) {
-                const triggerNorm = normalizeForTrigger(interruptTrigger);
-                if (triggerNorm && normalizeForTrigger(transcriptRef.current).includes(triggerNorm)) {
-                    cancelSilenceTimer();
-                    transcriptRef.current = '';
-                    setLiveTranscript('');
-                    if (active && !suspended) {
+            // Interrupt wake-words: matched anywhere (not just tail). Stop-reading
+            // cancels TTS only; abort cancels the agent's in-flight turn. They're
+            // independent so users can pick distinct phrases for each. Both
+            // discard the transcript and bail before the sendTrigger check, so
+            // an utterance like "停止 发送" can't accidentally send.
+            const transcriptNorm = normalizeForTrigger(transcriptRef.current);
+            const stopReadingNorm = stopReadingTrigger ? normalizeForTrigger(stopReadingTrigger) : '';
+            const abortNorm = abortTrigger ? normalizeForTrigger(abortTrigger) : '';
+            const matchedStop = !!stopReadingNorm && transcriptNorm.includes(stopReadingNorm);
+            const matchedAbort = !!abortNorm && transcriptNorm.includes(abortNorm);
+            if (matchedStop || matchedAbort) {
+                cancelSilenceTimer();
+                transcriptRef.current = '';
+                setLiveTranscript('');
+                if (active && !suspended) {
+                    if (matchedStop) {
                         ttsQueueRef.current = [];
                         setQueueLen(0);
                         tts.cancel();
-                        if (isBusy) {
-                            sessionClient.rpc(uid(), 'session.abort', { sessionId }).catch(() => undefined);
-                        }
                     }
-                    return;
+                    if (matchedAbort && isBusy) {
+                        sessionClient.rpc(uid(), 'session.abort', { sessionId }).catch(() => undefined);
+                    }
                 }
+                return;
             }
 
             // Wake-word fast-path: if the user said the configured trigger

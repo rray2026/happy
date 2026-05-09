@@ -199,15 +199,30 @@ export function SettingsPage() {
                 </label>
                 <label className="settings-item settings-item-row">
                     <Mic size={18} className="settings-item-icon" />
-                    <span className="settings-item-text">中断触发词</span>
+                    <span className="settings-item-text">中断朗读触发词</span>
                     <input
                         type="text"
                         className="settings-text-input"
-                        placeholder="可选，如 停止停止"
-                        value={settings.interruptTrigger ?? ''}
-                        onChange={(e) => updateSettings({ interruptTrigger: e.target.value })}
+                        placeholder="可选，如 别说了"
+                        value={settings.stopReadingTrigger ?? ''}
+                        onChange={(e) => updateSettings({ stopReadingTrigger: e.target.value })}
                         disabled={!voiceSupported}
-                        aria-label="中断触发词"
+                        aria-label="中断朗读触发词"
+                        spellCheck={false}
+                        maxLength={32}
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Mic size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">中断思考触发词</span>
+                    <input
+                        type="text"
+                        className="settings-text-input"
+                        placeholder="可选，如 停止思考"
+                        value={settings.abortTrigger ?? ''}
+                        onChange={(e) => updateSettings({ abortTrigger: e.target.value })}
+                        disabled={!voiceSupported}
+                        aria-label="中断思考触发词"
                         spellCheck={false}
                         maxLength={32}
                     />
