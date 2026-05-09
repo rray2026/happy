@@ -19,6 +19,7 @@
     "dompurify": "^3.4.0",
     "lucide-react": "^1.8.0",
     "marked": "^14.0.0",
+    "pinyin-pro": "^3.28.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.14.1"

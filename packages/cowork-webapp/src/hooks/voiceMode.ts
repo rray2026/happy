@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { pinyin } from 'pinyin-pro';
 import { sessionClient, uid } from '../session';
 import type { Item } from '../types';
 import { useSpeechRecognition } from './voice';
@@ -94,35 +95,82 @@ function cleanForSpeech(text: string, skipCode: boolean): string {
 }
 
 /**
- * Strip whitespace and punctuation, lowercase, so a wake-word check ignores
- * things like "发送、发送" / "发送 发送" / "Send, send." / extra trailing
- * periods. Keeps letters, digits, and CJK.
+ * Strip whitespace and punctuation, lowercase, then convert any Chinese
+ * characters to toneless pinyin. So homophone misrecognitions still match —
+ * "停止" / "停滞" / "庭制" all normalize to "tingzhi" — which is the whole
+ * point: Web Speech is shaky on Chinese tones and similar-sound chars, and
+ * we don't want a wake-word to silently miss because the engine guessed
+ * the wrong character.
+ *
+ * Non-Chinese characters (latin letters, digits) pass through unchanged.
  */
 function normalizeForTrigger(s: string): string {
-    return s.toLowerCase().replace(/[\s\p{P}]+/gu, '');
+    const stripped = s.toLowerCase().replace(/[\s\p{P}]+/gu, '');
+    if (!stripped) return '';
+    return pinyin(stripped, { toneType: 'none', type: 'string', separator: '' }).toLowerCase();
 }
 
 /**
- * If `transcript` ends with `trigger` (after normalization), return the
- * transcript with the trigger portion removed. Otherwise return null.
+ * Per-character normalized form of `s`, skipping whitespace and punctuation.
+ * Each entry is one source character's pinyin (or the raw lowercase char for
+ * non-Chinese) — preserves char boundaries so trigger matching can require
+ * boundary alignment ("停" → "ting" must match the trigger as a whole, not
+ * partial sub-strings like "ing").
+ */
+function perCharNormalized(s: string): string[] {
+    const out: string[] = [];
+    for (const c of s) {
+        const cn = normalizeForTrigger(c);
+        if (cn) out.push(cn);
+    }
+    return out;
+}
+
+/**
+ * Char-boundary-aligned `includes`: true iff some contiguous run of source
+ * characters in `transcript` normalizes exactly to `triggerNorm`. Prevents
+ * accidents like trigger "ing" matching the tail of "停" (pinyin "ting").
+ */
+function triggerOccursIn(transcript: string, triggerNorm: string): boolean {
+    if (!triggerNorm) return false;
+    const chars = perCharNormalized(transcript);
+    for (let i = 0; i < chars.length; i++) {
+        let acc = '';
+        for (let j = i; j < chars.length; j++) {
+            acc += chars[j];
+            if (acc === triggerNorm) return true;
+            if (acc.length > triggerNorm.length) break;
+        }
+    }
+    return false;
+}
+
+/**
+ * If `transcript` ends with `trigger` on a char boundary (after pinyin
+ * normalization), return the transcript with the trigger portion removed.
+ * Otherwise return null.
  *
- * Walks the original right-to-left counting *normalized* characters (i.e.
- * skipping whitespace + punctuation) until we've covered the full trigger.
- * That index is exactly where the trigger starts in the original; everything
- * before it is the user's actual message, with any trailing whitespace /
- * punctuation right before the trigger trimmed off.
+ * Walks the original right-to-left, prepending each char's normalized form
+ * to a buffer until it equals the trigger exactly. Bailing on length-overshoot
+ * enforces char-boundary alignment, so a short trigger like "zhi" can't false-
+ * match the tail of a single longer-pinyin char.
  */
 function stripTrailingTrigger(transcript: string, trigger: string): string | null {
     const triggerNorm = normalizeForTrigger(trigger);
     if (!triggerNorm) return null;
-    if (!normalizeForTrigger(transcript).endsWith(triggerNorm)) return null;
     let i = transcript.length;
-    let counted = 0;
-    while (i > 0 && counted < triggerNorm.length) {
+    let suffix = '';
+    while (i > 0) {
         i--;
-        if (!/[\s\p{P}]/u.test(transcript[i])) counted += 1;
+        const cn = normalizeForTrigger(transcript[i]);
+        if (!cn) continue;
+        suffix = cn + suffix;
+        if (suffix === triggerNorm) {
+            return transcript.slice(0, i).replace(/[\s\p{P}]+$/u, '').trim();
+        }
+        if (suffix.length > triggerNorm.length) return null;
     }
-    return transcript.slice(0, i).replace(/[\s\p{P}]+$/u, '').trim();
+    return null;
 }
 
 /** First chunk-end position after `start`, or -1 if we should wait for more text. */
@@ -313,16 +361,16 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             transcriptRef.current = (transcriptRef.current + ' ' + text).trim();
             setLiveTranscript(transcriptRef.current);
 
-            // Interrupt wake-words: matched anywhere (not just tail). Stop-reading
-            // cancels TTS only; abort cancels the agent's in-flight turn. They're
-            // independent so users can pick distinct phrases for each. Both
-            // discard the transcript and bail before the sendTrigger check, so
-            // an utterance like "停止 发送" can't accidentally send.
-            const transcriptNorm = normalizeForTrigger(transcriptRef.current);
+            // Interrupt wake-words: matched anywhere (not just tail) on a
+            // char boundary. Stop-reading cancels TTS only; abort cancels the
+            // agent's in-flight turn. They're independent so users can pick
+            // distinct phrases for each. Both discard the transcript and bail
+            // before the sendTrigger check, so an utterance like "停止 发送"
+            // can't accidentally send.
             const stopReadingNorm = stopReadingTrigger ? normalizeForTrigger(stopReadingTrigger) : '';
             const abortNorm = abortTrigger ? normalizeForTrigger(abortTrigger) : '';
-            const matchedStop = !!stopReadingNorm && transcriptNorm.includes(stopReadingNorm);
-            const matchedAbort = !!abortNorm && transcriptNorm.includes(abortNorm);
+            const matchedStop = !!stopReadingNorm && triggerOccursIn(transcriptRef.current, stopReadingNorm);
+            const matchedAbort = !!abortNorm && triggerOccursIn(transcriptRef.current, abortNorm);
             if (matchedStop || matchedAbort) {
                 cancelSilenceTimer();
                 transcriptRef.current = '';
