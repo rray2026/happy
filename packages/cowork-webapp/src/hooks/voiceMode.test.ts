@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    findTriggerRangesInOriginal,
     normalizeForTrigger,
     pinyinPhoneticDistance,
     stripTrailingTrigger,
@@ -165,6 +166,42 @@ describe('triggerOccursIn — fuzzy fallback', () => {
         // pinyin run shouldn't pass the threshold.
         const trig = normalizeForTrigger('停止思考');
         expect(triggerOccursIn('完全无关的话', trig)).toBe(false);
+    });
+});
+
+describe('findTriggerRangesInOriginal', () => {
+    it('reports the original range of a trigger word at the tail', () => {
+        const trig = normalizeForTrigger('停止');
+        // "请你停止" — 停止 at indices 2..3 (chars), code-units 2..4.
+        expect(findTriggerRangesInOriginal('请你停止', trig)).toEqual([[2, 4]]);
+    });
+
+    it('reports each occurrence when the trigger appears multiple times', () => {
+        const trig = normalizeForTrigger('停止');
+        expect(findTriggerRangesInOriginal('停止再停止吧', trig)).toEqual([[0, 2], [3, 5]]);
+    });
+
+    it('skips whitespace and punctuation between matched chars', () => {
+        const trig = normalizeForTrigger('停止');
+        // "停, 止" — punctuation/whitespace between the two source chars.
+        // Matches as one range covering "停" through "止" inclusive.
+        expect(findTriggerRangesInOriginal('停, 止', trig)).toEqual([[0, 4]]);
+    });
+
+    it('reports nothing for transcripts without the trigger', () => {
+        const trig = normalizeForTrigger('停止');
+        expect(findTriggerRangesInOriginal('完全无关的话', trig)).toEqual([]);
+    });
+
+    it('returns empty for empty inputs', () => {
+        expect(findTriggerRangesInOriginal('', 'tingzhi')).toEqual([]);
+        expect(findTriggerRangesInOriginal('hello', '')).toEqual([]);
+    });
+
+    it('aligns at char boundaries (no false sub-syllable matches)', () => {
+        // "ing" pinyin tail of 听 (ting) should NOT be reported — same
+        // protection as triggerOccursIn.
+        expect(findTriggerRangesInOriginal('听', 'ing')).toEqual([]);
     });
 });
 

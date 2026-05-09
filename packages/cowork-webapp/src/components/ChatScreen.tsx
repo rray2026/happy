@@ -577,6 +577,7 @@ export function ChatScreen() {
                         (voiceMode.phase === 'listening' || voiceMode.phase === 'pending')
                     }
                     pending={voiceMode.phase === 'pending'}
+                    triggerRanges={voiceMode.liveTriggerRanges}
                 />
 
 

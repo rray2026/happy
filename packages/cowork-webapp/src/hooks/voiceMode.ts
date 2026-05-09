@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pinyin } from 'pinyin-pro';
 import { sessionClient, uid } from '../session';
 import type { Item } from '../types';
@@ -64,6 +64,11 @@ export interface VoiceModeHandle {
     /** Live transcription preview: finalised words plus the current interim
      *  hypothesis. Cleared on send / stop / cancel. Empty when not listening. */
     liveTranscript: string;
+    /** `[start, end)` code-unit ranges within `liveTranscript` that match an
+     *  enabled trigger word (send / stop-reading / abort / cancel). Only
+     *  exact pinyin matches are listed — fuzzy hits don't have a precise
+     *  source range and pass through un-highlighted. */
+    liveTriggerRanges: Array<[number, number]>;
     setActive: (next: boolean) => void;
     /** UI tap: switch to `kind` (turning on if off), or turn off if already
      *  active in that kind. Marks current items as read and primes TTS as
@@ -202,6 +207,60 @@ export function pinyinPhoneticDistance(a: string, b: string): number {
         }
     }
     return dp[m][n];
+}
+
+/**
+ * For each non-overlapping char-boundary-aligned occurrence of `triggerNorm`
+ * in `transcript` (pinyin canonical form), return the `[start, end)`
+ * code-unit range of the original transcript covered by the match. Only does
+ * exact match — fuzzy-matched triggers don't have a precise source range and
+ * just go un-highlighted. Used to paint the trigger word a different color
+ * inside the live preview.
+ */
+export function findTriggerRangesInOriginal(
+    transcript: string,
+    triggerNorm: string,
+): Array<[number, number]> {
+    const ranges: Array<[number, number]> = [];
+    if (!triggerNorm || !transcript) return ranges;
+
+    let stripped = '';
+    const origStart: number[] = [];
+    const origEnd: number[] = [];
+    let pos = 0;
+    for (const c of transcript) {
+        const cuLen = c.length;
+        if (!/[\s\p{P}]/u.test(c)) {
+            stripped += c.toLowerCase();
+            origStart.push(pos);
+            origEnd.push(pos + cuLen);
+        }
+        pos += cuLen;
+    }
+    if (!stripped) return ranges;
+    const chars = pinyin(stripped, { toneType: 'none', type: 'array' }).map((p) => p.toLowerCase());
+    if (chars.length !== origStart.length) return ranges; // defensive
+
+    let i = 0;
+    while (i < chars.length) {
+        let acc = '';
+        let matchedTo = -1;
+        for (let j = i; j < chars.length; j++) {
+            acc += chars[j];
+            if (acc === triggerNorm) {
+                matchedTo = j;
+                break;
+            }
+            if (acc.length > triggerNorm.length) break;
+        }
+        if (matchedTo >= 0) {
+            ranges.push([origStart[i], origEnd[matchedTo]]);
+            i = matchedTo + 1;
+        } else {
+            i++;
+        }
+    }
+    return ranges;
 }
 
 /** Min normalized-pinyin length at which fuzzy matching kicks in. Below this
@@ -731,6 +790,29 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         }
     }, [tts, items, skipCode]);
 
+    // ── Live-transcript trigger-word highlight ──────────────────────────────
+    // Scan the current preview for any configured trigger and report the
+    // matched original-string ranges so the overlay can paint them in a
+    // different color. Recomputes only when the live text or a trigger
+    // setting changes — cheap (each match is one DP-free scan over per-char
+    // pinyin). stopReadingTrigger is excluded in input mode where it's
+    // ignored anyway.
+    const liveTriggerRanges = useMemo<Array<[number, number]>>(() => {
+        if (!liveTranscript) return [];
+        const triggers: string[] = [];
+        if (sendTrigger) triggers.push(sendTrigger);
+        if (mode === 'full' && stopReadingTrigger) triggers.push(stopReadingTrigger);
+        if (abortTrigger) triggers.push(abortTrigger);
+        if (cancelTrigger) triggers.push(cancelTrigger);
+        const out: Array<[number, number]> = [];
+        for (const t of triggers) {
+            const tn = normalizeForTrigger(t);
+            if (!tn) continue;
+            out.push(...findTriggerRangesInOriginal(liveTranscript, tn));
+        }
+        return out;
+    }, [liveTranscript, mode, sendTrigger, stopReadingTrigger, abortTrigger, cancelTrigger]);
+
     // ── Phase derivation ────────────────────────────────────────────────────
     // `tts.speaking` is our authoritative "an utterance is in flight"
     // signal — flipped true synchronously inside speak() and force-cleared
@@ -752,6 +834,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         supported: stt.supported,
         ttsSupported: tts.supported,
         liveTranscript,
+        liveTriggerRanges,
         setActive,
         toggleMode,
         stopReading,
