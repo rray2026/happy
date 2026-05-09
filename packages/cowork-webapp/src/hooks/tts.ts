@@ -22,10 +22,19 @@ interface Options {
     onError?: (msg: string) => void;
 }
 
+/** Per-call overrides — applied on top of the hook-level defaults so
+ *  callers can switch voice / rate / lang per utterance (e.g. different
+ *  voice for Chinese vs English segments of a mixed-language reply). */
+export interface SpeakOverrides {
+    voiceURI?: string;
+    rate?: number;
+    lang?: string;
+}
+
 export interface SpeechSynthesisHandle {
     supported: boolean;
     speaking: boolean;
-    speak: (text: string) => void;
+    speak: (text: string, overrides?: SpeakOverrides) => void;
     cancel: () => void;
     /**
      * Trigger a silent utterance synchronously inside a user-gesture handler
@@ -53,13 +62,16 @@ export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
 
     const supported = isSpeechSynthesisSupported();
 
-    const speak = useCallback((text: string) => {
+    const speak = useCallback((text: string, overrides?: SpeakOverrides) => {
         if (!supported || !text.trim()) return;
         const u = new SpeechSynthesisUtterance(text);
-        u.rate = rate ?? 1;
-        if (lang) u.lang = lang;
-        if (voiceURI) {
-            const v = window.speechSynthesis.getVoices().find((v) => v.voiceURI === voiceURI);
+        const effRate = overrides?.rate ?? rate ?? 1;
+        const effLang = overrides?.lang ?? lang;
+        const effVoiceURI = overrides?.voiceURI ?? voiceURI;
+        u.rate = effRate;
+        if (effLang) u.lang = effLang;
+        if (effVoiceURI) {
+            const v = window.speechSynthesis.getVoices().find((vv) => vv.voiceURI === effVoiceURI);
             if (v) u.voice = v;
         }
         // Each utterance settles exactly once, regardless of how the

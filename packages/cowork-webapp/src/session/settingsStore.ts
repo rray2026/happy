@@ -13,10 +13,21 @@ const KEY = 'cowork:settings';
 export interface Settings {
     /** BCP-47 language tag for SpeechRecognition. Empty means "use navigator.language". */
     voiceLang?: string;
-    /** SpeechSynthesisVoice.voiceURI to use for TTS. Empty = browser default. */
+    /** SpeechSynthesisVoice.voiceURI to use for TTS. Empty = browser default.
+     *  Acts as the fallback when a per-language override (ttsVoiceZh /
+     *  ttsVoiceEn) isn't set. */
     ttsVoice?: string;
-    /** TTS rate, 0.5–2.0. Defaults to 1.0 when unset. */
+    /** TTS rate, 0.5–2.0. Defaults to 1.0 when unset. Acts as the fallback
+     *  when a per-language override (ttsRateZh / ttsRateEn) isn't set. */
     ttsRate?: number;
+    /** Override voice for Chinese segments. Falls back to ttsVoice. */
+    ttsVoiceZh?: string;
+    /** Override rate for Chinese segments (0.5–2.0). Falls back to ttsRate. */
+    ttsRateZh?: number;
+    /** Override voice for English segments. Falls back to ttsVoice. */
+    ttsVoiceEn?: string;
+    /** Override rate for English segments (0.5–2.0). Falls back to ttsRate. */
+    ttsRateEn?: number;
     /** Voice-mode auto-send silence buffer in ms (after browser onend). Default 2500. */
     silenceMs?: number;
     /** Wake word that, when said at the end of an utterance, sends immediately

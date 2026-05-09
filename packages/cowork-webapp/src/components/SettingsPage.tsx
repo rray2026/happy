@@ -57,6 +57,10 @@ export function SettingsPage() {
         ? ttsVoices.filter((v) => v.lang.toLowerCase().startsWith(langPrefix.toLowerCase()))
         : ttsVoices;
     const ttsRate = settings.ttsRate ?? SETTINGS_DEFAULTS.ttsRate;
+    const ttsRateZh = settings.ttsRateZh ?? ttsRate;
+    const ttsRateEn = settings.ttsRateEn ?? ttsRate;
+    const zhVoices = ttsVoices.filter((v) => v.lang.toLowerCase().startsWith('zh'));
+    const enVoices = ttsVoices.filter((v) => v.lang.toLowerCase().startsWith('en'));
     const silenceMs = settings.silenceMs ?? SETTINGS_DEFAULTS.silenceMs;
     const skipCode = settings.skipCode ?? SETTINGS_DEFAULTS.skipCode;
     const toolCue = settings.toolCue ?? SETTINGS_DEFAULTS.toolCue;
@@ -134,13 +138,13 @@ export function SettingsPage() {
                 </div>
                 <label className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
-                    <span className="settings-item-text">朗读音色</span>
+                    <span className="settings-item-text">默认音色</span>
                     <select
                         className="settings-select"
                         value={settings.ttsVoice ?? ''}
                         onChange={(e) => updateSettings({ ttsVoice: e.target.value })}
                         disabled={!ttsSupported}
-                        aria-label="朗读音色"
+                        aria-label="默认音色"
                     >
                         <option value="">浏览器默认</option>
                         {filteredVoices.map((v) => (
@@ -152,7 +156,7 @@ export function SettingsPage() {
                 </label>
                 <label className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
-                    <span className="settings-item-text">朗读语速</span>
+                    <span className="settings-item-text">默认语速</span>
                     <span className="settings-item-value-meta">{ttsRate.toFixed(1)}×</span>
                     <input
                         type="range"
@@ -163,7 +167,75 @@ export function SettingsPage() {
                         value={ttsRate}
                         onChange={(e) => updateSettings({ ttsRate: Number(e.target.value) })}
                         disabled={!ttsSupported}
-                        aria-label="朗读语速"
+                        aria-label="默认语速"
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Headphones size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">中文音色</span>
+                    <select
+                        className="settings-select"
+                        value={settings.ttsVoiceZh ?? ''}
+                        onChange={(e) => updateSettings({ ttsVoiceZh: e.target.value })}
+                        disabled={!ttsSupported}
+                        aria-label="中文音色"
+                    >
+                        <option value="">沿用默认</option>
+                        {zhVoices.map((v) => (
+                            <option key={v.voiceURI} value={v.voiceURI}>
+                                {v.name}{v.localService ? '' : '（云端）'} · {v.lang}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Headphones size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">中文语速</span>
+                    <span className="settings-item-value-meta">{ttsRateZh.toFixed(1)}×</span>
+                    <input
+                        type="range"
+                        className="settings-slider"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={ttsRateZh}
+                        onChange={(e) => updateSettings({ ttsRateZh: Number(e.target.value) })}
+                        disabled={!ttsSupported}
+                        aria-label="中文语速"
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Headphones size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">英文音色</span>
+                    <select
+                        className="settings-select"
+                        value={settings.ttsVoiceEn ?? ''}
+                        onChange={(e) => updateSettings({ ttsVoiceEn: e.target.value })}
+                        disabled={!ttsSupported}
+                        aria-label="英文音色"
+                    >
+                        <option value="">沿用默认</option>
+                        {enVoices.map((v) => (
+                            <option key={v.voiceURI} value={v.voiceURI}>
+                                {v.name}{v.localService ? '' : '（云端）'} · {v.lang}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Headphones size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">英文语速</span>
+                    <span className="settings-item-value-meta">{ttsRateEn.toFixed(1)}×</span>
+                    <input
+                        type="range"
+                        className="settings-slider"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={ttsRateEn}
+                        onChange={(e) => updateSettings({ ttsRateEn: Number(e.target.value) })}
+                        disabled={!ttsSupported}
+                        aria-label="英文语速"
                     />
                 </label>
                 <label className="settings-item settings-item-row">

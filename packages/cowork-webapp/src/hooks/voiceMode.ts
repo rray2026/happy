@@ -20,8 +20,15 @@ export interface VoiceModeOptions {
     /** True when a permission modal is on screen — voice loop must wait for click. */
     hasPermission: boolean;
     voiceLang?: string;
+    /** Default TTS voice / rate. Per-language overrides below win when set. */
     ttsVoice?: string;
     ttsRate?: number;
+    /** Override for Chinese-language utterance segments. */
+    ttsVoiceZh?: string;
+    ttsRateZh?: number;
+    /** Override for English-language utterance segments. */
+    ttsVoiceEn?: string;
+    ttsRateEn?: number;
     /** Extra silence after browser onend before we send (default 2500ms). */
     silenceMs?: number;
     /** Optional wake-word: when an utterance ends with this phrase, send
@@ -380,6 +387,61 @@ export function stripTrailingTrigger(transcript: string, trigger: string): strin
     return null;
 }
 
+/** Coarse language tag for TTS voice/rate switching. We split readback into
+ *  contiguous segments of one language so each can use its own voice/rate —
+ *  English in a Chinese voice (or vice versa) sounds robotic, and the same
+ *  numeric rate has very different perceived speed across the two. */
+export type TtsSegmentLang = 'zh' | 'en';
+
+/**
+ * Per-character language classification. Han chars and CJK punctuation are
+ * 'zh'; latin letters are 'en'; everything else (digits, ASCII punctuation,
+ * whitespace) is 'neutral' and rides with the surrounding language.
+ */
+function classifyCharForTts(c: string): TtsSegmentLang | 'neutral' {
+    if (/\p{Script=Han}/u.test(c)) return 'zh';
+    if (/[　-〿＀-￯]/u.test(c)) return 'zh';
+    if (/[A-Za-z]/.test(c)) return 'en';
+    return 'neutral';
+}
+
+/**
+ * Split mixed-language text into language-tagged segments at language
+ * transitions. Neutral chars (whitespace, digits, ascii punct) attach to
+ * the current segment so we don't fragment on every space. A purely
+ * neutral string defaults to 'en' since the engine's default voice is
+ * usually English.
+ */
+export function splitByLanguage(text: string): Array<{ text: string; lang: TtsSegmentLang }> {
+    const out: Array<{ text: string; lang: TtsSegmentLang }> = [];
+    if (!text.trim()) return out;
+    let current: TtsSegmentLang | null = null;
+    let buf = '';
+    for (const c of text) {
+        const cls = classifyCharForTts(c);
+        if (cls === 'neutral') {
+            buf += c;
+            continue;
+        }
+        if (current === null) {
+            current = cls;
+            buf += c;
+            continue;
+        }
+        if (cls === current) {
+            buf += c;
+            continue;
+        }
+        // Language switch — flush what we've collected so far, then start
+        // a fresh segment with this character.
+        if (buf) out.push({ text: buf, lang: current });
+        current = cls;
+        buf = c;
+    }
+    if (buf) out.push({ text: buf, lang: current ?? 'en' });
+    return out;
+}
+
 /** First chunk-end position after `start`, or -1 if we should wait for more text. */
 function findChunkEnd(text: string, start: number, fallbackAfter = 60): number {
     let lastStrong = -1;
@@ -417,6 +479,10 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         voiceLang,
         ttsVoice,
         ttsRate,
+        ttsVoiceZh,
+        ttsRateZh,
+        ttsVoiceEn,
+        ttsRateEn,
         silenceMs = 2500,
         sendTrigger,
         stopReadingTrigger,
@@ -465,22 +531,40 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     }, []);
 
     // Drain pump: dump the entire queue into the browser's TTS engine in one
-    // pass. The engine handles serial playback internally, so back-to-back
-    // speak() calls are fine. We depend on `speak` (a stable useCallback)
-    // rather than the whole `tts` object so the pump doesn't re-run on
-    // every parent render just because tts.speaking changed.
+    // pass. Each chunk is split into language-tagged segments so the engine
+    // can use a Chinese voice + rate for the Chinese parts and an English
+    // voice + rate for the English parts of mixed-language replies. The
+    // engine handles serial playback internally, so back-to-back speak()
+    // calls fan out cleanly.
     const ttsSpeak = tts.speak;
+    const speakSegment = useCallback((segText: string, segLang: TtsSegmentLang) => {
+        if (segLang === 'zh') {
+            ttsSpeak(segText, {
+                voiceURI: ttsVoiceZh ?? ttsVoice,
+                rate: ttsRateZh ?? ttsRate,
+                lang: 'zh-CN',
+            });
+        } else {
+            ttsSpeak(segText, {
+                voiceURI: ttsVoiceEn ?? ttsVoice,
+                rate: ttsRateEn ?? ttsRate,
+                lang: 'en-US',
+            });
+        }
+    }, [ttsSpeak, ttsVoice, ttsRate, ttsVoiceZh, ttsRateZh, ttsVoiceEn, ttsRateEn]);
     useEffect(() => {
         if (!active || suspended || mode !== 'full') return;
         if (ttsQueueRef.current.length === 0) return;
         let pumped = false;
         while (ttsQueueRef.current.length > 0) {
             const next = ttsQueueRef.current.shift()!;
-            ttsSpeak(next);
+            for (const seg of splitByLanguage(next)) {
+                speakSegment(seg.text, seg.lang);
+            }
             pumped = true;
         }
         if (pumped) setQueueLen(0);
-    }, [queueLen, active, suspended, mode, ttsSpeak]);
+    }, [queueLen, active, suspended, mode, speakSegment]);
 
     // ── Item-stream → sentence chunker ──────────────────────────────────────
     /** Per-item read pointer in the *cleaned* text coordinate space. */

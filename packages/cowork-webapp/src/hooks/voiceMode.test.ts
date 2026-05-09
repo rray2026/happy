@@ -3,6 +3,7 @@ import {
     findTriggerRangesInOriginal,
     normalizeForTrigger,
     pinyinPhoneticDistance,
+    splitByLanguage,
     stripTrailingTrigger,
     triggerOccursIn,
 } from './voiceMode';
@@ -202,6 +203,55 @@ describe('findTriggerRangesInOriginal', () => {
         // "ing" pinyin tail of 听 (ting) should NOT be reported — same
         // protection as triggerOccursIn.
         expect(findTriggerRangesInOriginal('听', 'ing')).toEqual([]);
+    });
+});
+
+describe('splitByLanguage', () => {
+    it('returns empty for empty / whitespace-only input', () => {
+        expect(splitByLanguage('')).toEqual([]);
+        expect(splitByLanguage('   ')).toEqual([]);
+    });
+
+    it('keeps a pure-Chinese string in one zh segment', () => {
+        expect(splitByLanguage('你好世界')).toEqual([
+            { text: '你好世界', lang: 'zh' },
+        ]);
+    });
+
+    it('keeps a pure-English string in one en segment', () => {
+        expect(splitByLanguage('Hello world')).toEqual([
+            { text: 'Hello world', lang: 'en' },
+        ]);
+    });
+
+    it('splits at language transitions in mixed text', () => {
+        expect(splitByLanguage('我们用 React 19 来做这个')).toEqual([
+            { text: '我们用 ', lang: 'zh' },
+            { text: 'React 19 ', lang: 'en' },
+            { text: '来做这个', lang: 'zh' },
+        ]);
+    });
+
+    it('treats CJK punctuation as Chinese', () => {
+        expect(splitByLanguage('你好，world')).toEqual([
+            { text: '你好，', lang: 'zh' },
+            { text: 'world', lang: 'en' },
+        ]);
+    });
+
+    it('attaches digits + ascii punct to the surrounding language', () => {
+        // Numbers ride with the preceding zh segment; trailing English punct
+        // rides with the following en segment.
+        expect(splitByLanguage('共 5 个 items')).toEqual([
+            { text: '共 5 个 ', lang: 'zh' },
+            { text: 'items', lang: 'en' },
+        ]);
+    });
+
+    it('defaults a purely-neutral string to en', () => {
+        expect(splitByLanguage('123')).toEqual([
+            { text: '123', lang: 'en' },
+        ]);
     });
 });
 
