@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     normalizeForTrigger,
+    pinyinPhoneticDistance,
     stripTrailingTrigger,
     triggerOccursIn,
 } from './voiceMode';
@@ -107,5 +108,84 @@ describe('stripTrailingTrigger', () => {
 
     it('returns null when transcript is shorter than trigger', () => {
         expect(stripTrailingTrigger('停', '停止')).toBeNull();
+    });
+});
+
+describe('pinyinPhoneticDistance', () => {
+    it('is 0 for identical strings', () => {
+        expect(pinyinPhoneticDistance('tingzhi', 'tingzhi')).toBe(0);
+    });
+
+    it('charges the full unit cost for unrelated single-char subs', () => {
+        expect(pinyinPhoneticDistance('tingzhi', 'qingzhi')).toBe(1);
+    });
+
+    it('charges the discount cost for 平翘舌 confusion (zh↔z)', () => {
+        // tingzhi → tingzi: zh→z macro. Cost 0.2.
+        expect(pinyinPhoneticDistance('tingzhi', 'tingzi')).toBeCloseTo(0.2, 5);
+    });
+
+    it('charges the discount cost for 前后鼻音 confusion (ing↔in)', () => {
+        // tingzhi → tinzhi: ing→in macro at position 4. Cost 0.2.
+        expect(pinyinPhoneticDistance('tingzhi', 'tinzhi')).toBeCloseTo(0.2, 5);
+    });
+
+    it('combines multiple confusables into a sum of discount costs', () => {
+        // tingzhi → tinzi: ing→in (0.2) + zh→z (0.2). Total 0.4.
+        expect(pinyinPhoneticDistance('tingzhi', 'tinzi')).toBeCloseTo(0.4, 5);
+    });
+
+    it('charges 0.3 for n↔l confusion', () => {
+        expect(pinyinPhoneticDistance('na', 'la')).toBeCloseTo(0.3, 5);
+    });
+});
+
+describe('triggerOccursIn — fuzzy fallback', () => {
+    it('matches a near-mishearing for triggers ≥ FUZZY_MIN_LEN', () => {
+        // Trigger 停止 (tingzhi), user said "停制" pinyin tingzhi → exact.
+        // Try a real mis-recognition: tingzi (zh→z) — should still match.
+        const trig = normalizeForTrigger('停止');
+        // simulate the transcript carrying "tingzi" as a homophone via a char
+        // pair that pinyin to "tingzi": 停子 → tingzi.
+        expect(triggerOccursIn('请你停子', trig)).toBe(true);
+    });
+
+    it('does not fuzzy-match short triggers (under min length)', () => {
+        // Trigger "止" (zhi, 3 chars), too short for fuzzy. A near-rhyme like
+        // "知" (zhi) matches exactly anyway, but "之" (zhi) too — nothing to
+        // test for fuzzy gating here. Instead try trigger "你" (ni) and a
+        // transcript with "li" — under fuzzy this would match (n↔l = 0.3,
+        // length 2, threshold 0.4); we want it NOT to match because length < 6.
+        const trig = normalizeForTrigger('你');
+        expect(triggerOccursIn('哩', trig)).toBe(false);
+    });
+
+    it('rejects far-distance candidates even for long triggers', () => {
+        // Trigger 停止思考 (tingzhisikao). Transcript with completely unrelated
+        // pinyin run shouldn't pass the threshold.
+        const trig = normalizeForTrigger('停止思考');
+        expect(triggerOccursIn('完全无关的话', trig)).toBe(false);
+    });
+});
+
+describe('stripTrailingTrigger — fuzzy fallback', () => {
+    it('strips a near-mishearing tail when the trigger is long enough', () => {
+        // Trigger 发送发送 (fasongfasong, 12 chars). Tail mis-heard as
+        // 发送花送 (fasonghuasong) — h↔f at position 8 costs 0.3, total well
+        // below threshold 12*0.2=2.4.
+        const result = stripTrailingTrigger('请帮我做这件事 发送花送', '发送发送');
+        expect(result).toBe('请帮我做这件事');
+    });
+
+    it('returns null when fuzzy distance exceeds threshold', () => {
+        // 发送发送 vs random tail "完全不同" — pinyin "wanquanbutong",
+        // no overlap with "fasongfasong". Distance >> threshold.
+        expect(stripTrailingTrigger('请你完全不同', '发送发送')).toBeNull();
+    });
+
+    it('does not fuzzy-strip when trigger is below min length', () => {
+        // Trigger "嗯" (3 chars), short enough that fuzzy is gated off.
+        // A near-rhyme tail wouldn't match.
+        expect(stripTrailingTrigger('哎', '嗯')).toBeNull();
     });
 });

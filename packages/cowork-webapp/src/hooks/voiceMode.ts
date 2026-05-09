@@ -141,20 +141,115 @@ export function normalizeForTrigger(s: string): string {
     return pinyinArrayOf(s).join('');
 }
 
+// ── Weighted phonetic distance ──────────────────────────────────────────────
+//
+// Catalogue of common pinyin substring confusables — both Chinese regional
+// accent patterns and Web Speech mishearings collapse onto these pairs. Each
+// entry is (a, b, cost): substituting a↔b costs `cost` instead of the default
+// 1.0. The table is small on purpose — we want misheard wake-words to match,
+// not arbitrary near-rhymes.
+const PINYIN_CONFUSABLES: ReadonlyArray<readonly [string, string, number]> = [
+    // 平翘舌不分: zh/z, ch/c, sh/s
+    ['zh', 'z', 0.2],
+    ['ch', 'c', 0.2],
+    ['sh', 's', 0.2],
+    // 前后鼻音不分: ing/in, eng/en, ang/an
+    ['ing', 'in', 0.2],
+    ['eng', 'en', 0.2],
+    ['ang', 'an', 0.2],
+    // 边鼻音 n/l
+    ['n', 'l', 0.3],
+    // h/f (湖北/福建一带)
+    ['h', 'f', 0.3],
+    // r/l
+    ['r', 'l', 0.3],
+];
+
+/**
+ * Weighted Levenshtein on pinyin strings. Single-char substitutions cost
+ * 1 if different, 0 if same; multi-char "macro" substitutions from
+ * PINYIN_CONFUSABLES cost less. Insertions and deletions cost 1.
+ *
+ * Exposed for tests.
+ */
+export function pinyinPhoneticDistance(a: string, b: string): number {
+    const m = a.length;
+    const n = b.length;
+    if (!m) return n;
+    if (!n) return m;
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            const subCost = a[i - 1] === b[j - 1] ? 0 : 1;
+            let best = Math.min(
+                dp[i - 1][j] + 1,
+                dp[i][j - 1] + 1,
+                dp[i - 1][j - 1] + subCost,
+            );
+            for (const [x, y, c] of PINYIN_CONFUSABLES) {
+                if (i >= x.length && j >= y.length &&
+                    a.endsWith(x, i) && b.endsWith(y, j)) {
+                    best = Math.min(best, dp[i - x.length][j - y.length] + c);
+                }
+                if (i >= y.length && j >= x.length &&
+                    a.endsWith(y, i) && b.endsWith(x, j)) {
+                    best = Math.min(best, dp[i - y.length][j - x.length] + c);
+                }
+            }
+            dp[i][j] = best;
+        }
+    }
+    return dp[m][n];
+}
+
+/** Min normalized-pinyin length at which fuzzy matching kicks in. Below this
+ *  (≈ 1 Chinese char), the false-positive rate from edit-distance slack
+ *  starts to swallow legitimate non-trigger speech. */
+const FUZZY_MIN_LEN = 6;
+/** Per-char allowed cost for fuzzy match. 0.2 means a 10-char trigger tolerates
+ *  up to 2.0 cost — i.e. ~2 confusable substitutions, or one full-cost edit. */
+const FUZZY_COST_RATIO = 0.2;
+/** Window-size slack: how many chars longer/shorter than the trigger can
+ *  still be considered for fuzzy match. Keeps the search bounded. */
+const FUZZY_LEN_SLACK = 2;
+
 /**
  * Char-boundary-aligned `includes`: true iff some contiguous run of source
- * characters in `transcript` normalizes exactly to `triggerNorm`. Prevents
- * accidents like trigger "ing" matching the tail of "停" (pinyin "ting").
+ * characters in `transcript` normalizes to `triggerNorm` either exactly, or
+ * within phonetic edit distance for triggers long enough to make a fuzzy
+ * match meaningful. Prevents accidents like trigger "ing" matching the tail
+ * of "停" (pinyin "ting") — exact match is char-boundary aligned and the
+ * fuzzy fallback is gated on minimum length.
  */
 export function triggerOccursIn(transcript: string, triggerNorm: string): boolean {
     if (!triggerNorm) return false;
     const chars = pinyinArrayOf(transcript);
+
+    // Exact, char-boundary aligned.
     for (let i = 0; i < chars.length; i++) {
         let acc = '';
         for (let j = i; j < chars.length; j++) {
             acc += chars[j];
             if (acc === triggerNorm) return true;
             if (acc.length > triggerNorm.length) break;
+        }
+    }
+
+    // Fuzzy fallback: weighted edit distance over each candidate window
+    // aligned at char boundaries. Skipped for short triggers because the
+    // false-positive rate dominates there.
+    if (triggerNorm.length < FUZZY_MIN_LEN) return false;
+    const threshold = triggerNorm.length * FUZZY_COST_RATIO;
+    for (let i = 0; i < chars.length; i++) {
+        let acc = '';
+        for (let j = i; j < chars.length; j++) {
+            acc += chars[j];
+            if (acc.length > triggerNorm.length + FUZZY_LEN_SLACK) break;
+            if (acc.length >= triggerNorm.length - FUZZY_LEN_SLACK) {
+                if (pinyinPhoneticDistance(acc, triggerNorm) <= threshold) return true;
+            }
         }
     }
     return false;
@@ -188,6 +283,7 @@ export function stripTrailingTrigger(transcript: string, trigger: string): strin
     if (!stripped) return null;
     const chars = pinyin(stripped, { toneType: 'none', type: 'array' }).map((p) => p.toLowerCase());
 
+    // Exact, char-boundary aligned.
     let suffix = '';
     for (let k = chars.length - 1; k >= 0; k--) {
         suffix = chars[k] + suffix;
@@ -195,7 +291,32 @@ export function stripTrailingTrigger(transcript: string, trigger: string): strin
             const cutAt = origIdx[k];
             return transcript.slice(0, cutAt).replace(/[\s\p{P}]+$/u, '').trim();
         }
-        if (suffix.length > triggerNorm.length) return null;
+        if (suffix.length > triggerNorm.length) break;
+    }
+
+    // Fuzzy fallback: walk back at char boundaries, find the boundary with
+    // smallest phonetic edit distance to the trigger, accept if within
+    // threshold. Same min-length gate as triggerOccursIn — short triggers
+    // would false-fire too often.
+    if (triggerNorm.length < FUZZY_MIN_LEN) return null;
+    const threshold = triggerNorm.length * FUZZY_COST_RATIO;
+    let bestK = -1;
+    let bestCost = Infinity;
+    suffix = '';
+    for (let k = chars.length - 1; k >= 0; k--) {
+        suffix = chars[k] + suffix;
+        if (suffix.length > triggerNorm.length + FUZZY_LEN_SLACK) break;
+        if (suffix.length >= triggerNorm.length - FUZZY_LEN_SLACK) {
+            const cost = pinyinPhoneticDistance(suffix, triggerNorm);
+            if (cost <= threshold && cost < bestCost) {
+                bestCost = cost;
+                bestK = k;
+            }
+        }
+    }
+    if (bestK >= 0) {
+        const cutAt = origIdx[bestK];
+        return transcript.slice(0, cutAt).replace(/[\s\p{P}]+$/u, '').trim();
     }
     return null;
 }
