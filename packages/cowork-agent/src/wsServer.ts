@@ -46,8 +46,15 @@ export function startWsServer(opts: {
     listSessions: () => SessionMeta[];
     /** Called once per session on reconnect to pump the delta to the client. */
     replayFrom: ReplayFetcher;
+    /**
+     * Optional hook invoked on the reconnect path before listing/replaying.
+     * Lets the manager bump per-session seq counters to start emitting at
+     * `clientLastSeqs[sid] + 1` when the in-memory store has fewer events
+     * than the client persisted (typically after an agent restart).
+     */
+    alignSeqs?: (clientLastSeqs: Record<string, number>) => void;
 }): WsServerHandle {
-    const { port, sessionId, cliKeys, qrPayload, onRpc, onInput, listSessions, replayFrom } = opts;
+    const { port, sessionId, cliKeys, qrPayload, onRpc, onInput, listSessions, replayFrom, alignSeqs } = opts;
     const host = opts.host ?? '127.0.0.1';
 
     let activeClient: WebSocket | null = null;
@@ -90,6 +97,10 @@ export function startWsServer(opts: {
         credential: string,
         lastSeqs: Record<string, number>,
     ): void {
+        // Reconnect path: trust the client's seq watermark over our (possibly
+        // empty) in-memory store, so subsequent appends emit at clientSeq+1
+        // instead of restarting the count and getting silently dropped.
+        if (alignSeqs) alignSeqs(lastSeqs);
         const sessions = listSessions();
         send(ws, {
             type: 'welcome',

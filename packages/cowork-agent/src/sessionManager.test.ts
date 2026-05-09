@@ -212,6 +212,41 @@ describe('SessionManager per-session cwd', () => {
             /escapes agent root/,
         );
     });
+
+    it('alignSeqs bridges agent-restart by bumping fresh stores to clientSeq+1', () => {
+        const mgr = new SessionManager({ cwd: '/tmp', onBroadcast: () => {} });
+        const a = mgr.create({ tool: 'claude' });
+        const b = mgr.create({ tool: 'claude' });
+
+        // Simulate post-restart state for `a` only: client claims to have
+        // seen up to seq 8. `b` is also fresh and hasn't been claimed.
+        mgr.alignSeqs({ [a.id]: 8 });
+
+        // Reaching into the manager to verify next append emits at the
+        // aligned seq for `a` and stays at 0 for `b` (no client claim).
+        type Internal = { sessions: Map<string, { store: { append: (p: unknown) => number } }> };
+        const internal = mgr as unknown as Internal;
+        expect(internal.sessions.get(a.id)!.store.append('x')).toBe(9);
+        expect(internal.sessions.get(b.id)!.store.append('y')).toBe(0);
+
+        mgr.dispose();
+    });
+
+    it('alignSeqs ignores stores that already carry events (does not rewind/jump)', () => {
+        const mgr = new SessionManager({ cwd: '/tmp', onBroadcast: () => {} });
+        const meta = mgr.create({ tool: 'claude' });
+        type Internal = { sessions: Map<string, { store: { append: (p: unknown) => number } }> };
+        const internal = mgr as unknown as Internal;
+        // Manager already has its own event in the store
+        internal.sessions.get(meta.id)!.store.append('seed');
+
+        mgr.alignSeqs({ [meta.id]: 99 });
+
+        // Next append continues from the store's own counter, not the client's.
+        expect(internal.sessions.get(meta.id)!.store.append('next')).toBe(1);
+
+        mgr.dispose();
+    });
 });
 
 describe('SessionManager — claude channel path', () => {

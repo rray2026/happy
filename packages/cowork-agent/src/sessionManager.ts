@@ -379,6 +379,23 @@ export class SessionManager {
         return entry.store.getDelta(fromSeq);
     }
 
+    /**
+     * Bridge agent restarts: after a fresh process boots with an empty event
+     * store, a reconnecting client's `lastSeqs` watermark is higher than
+     * anything we have. Advance each session's seq counter so subsequent
+     * appends emit at `clientSeq + 1` rather than restarting at 0 — otherwise
+     * the client's own dedup would silently drop everything until it caught
+     * back up.
+     */
+    alignSeqs(clientLastSeqs: Record<string, number>): void {
+        for (const entry of this.sessions.values()) {
+            const target = clientLastSeqs[entry.id];
+            if (typeof target === 'number') {
+                entry.store.alignTo(target);
+            }
+        }
+    }
+
     abort(sessionId: string): void {
         const entry = this.sessions.get(sessionId);
         if (!entry) return;

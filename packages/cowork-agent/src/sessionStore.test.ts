@@ -82,4 +82,33 @@ describe('SessionStore', () => {
             expect(s.getOldestSeq()).toBe(1);
         });
     });
+
+    describe('alignTo (agent-restart bridge)', () => {
+        it('advances nextSeq so the next append emits at clientSeq+1 when the store is fresh', () => {
+            const s = new SessionStore();
+            // Fresh store after a process restart, client claims it last saw seq 8.
+            s.alignTo(8);
+            const next = s.append('hi');
+            expect(next).toBe(9);
+            expect(s.getCurrentSeq()).toBe(9);
+        });
+
+        it('is a no-op when the store already has its own events (regardless of direction)', () => {
+            const s = new SessionStore();
+            s.append('first'); // nextSeq = 1, no longer initial
+            s.alignTo(99); // client claims to be ahead; we trust our own state
+            expect(s.append('second')).toBe(1);
+
+            const t = new SessionStore();
+            for (let i = 0; i < 5; i++) t.append(i); // nextSeq = 5
+            t.alignTo(2); // client behind; ignore
+            expect(t.append('x')).toBe(5);
+        });
+
+        it('ignores negative clientSeq (no events seen yet)', () => {
+            const s = new SessionStore();
+            s.alignTo(-1);
+            expect(s.append('a')).toBe(0);
+        });
+    });
 });

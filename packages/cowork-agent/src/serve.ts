@@ -86,6 +86,7 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         qrPayload,
         listSessions: () => manager.list(),
         replayFrom: (sid, fromSeq) => manager.replayFrom(sid, fromSeq),
+        alignSeqs: (lastSeqs) => manager.alignSeqs(lastSeqs),
         onInput: (sid, text) => {
             manager.handleInput(sid, text).catch((err: Error) =>
                 logger.debug('[serve] input error:', err?.message),
