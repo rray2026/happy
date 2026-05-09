@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bot, Pencil } from 'lucide-react';
+import { Plus, Bot, Pencil, RefreshCw } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { NewSessionModal } from './NewSessionModal';
@@ -38,9 +38,29 @@ export function SessionListPage() {
     const [names, setNames] = useState<Record<string, string>>(loadNames);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editingValue, setEditingValue] = useState('');
+    const [refreshing, setRefreshing] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => sessionClient.onSessionsChange(setSessions), []);
+
+    // Defensive resync on mount: covers reconnect timing edge cases where the
+    // cached list could be stale (e.g. user opens the list right after a
+    // resume that raced with auto-reconnect).
+    useEffect(() => {
+        sessionClient.refreshSessions().catch(() => { /* ignore */ });
+    }, []);
+
+    const handleRefresh = useCallback(async () => {
+        if (refreshing) return;
+        setRefreshing(true);
+        try {
+            await sessionClient.refreshSessions();
+        } catch {
+            // Surfaced via the unchanged list — no toast plumbing here.
+        } finally {
+            setRefreshing(false);
+        }
+    }, [refreshing]);
 
     useEffect(() => {
         if (editingId) inputRef.current?.focus();
@@ -72,14 +92,25 @@ export function SessionListPage() {
         <div className="session-list-page tab-page">
             <div className="session-list-header">
                 <h1 className="session-list-title">会话</h1>
-                <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => setNewSessionOpen(true)}
-                    aria-label="新建会话"
-                >
-                    <Plus size={22} />
-                </button>
+                <div className="session-list-header-actions">
+                    <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={handleRefresh}
+                        disabled={refreshing}
+                        aria-label="刷新会话列表"
+                    >
+                        <RefreshCw size={20} className={refreshing ? 'icon-spin' : undefined} />
+                    </button>
+                    <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={() => setNewSessionOpen(true)}
+                        aria-label="新建会话"
+                    >
+                        <Plus size={22} />
+                    </button>
+                </div>
             </div>
 
             <div className="session-list-body">

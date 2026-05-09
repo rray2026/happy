@@ -198,6 +198,76 @@ describe('SessionClient: resume from stored', () => {
         expect(saveSpy).not.toHaveBeenCalled();
         expect(client.getStatus()).toBe('connected');
     });
+
+    it('is idempotent when already connected on the same credential', () => {
+        // Regression: calling connectFromStored a second time after the first
+        // resume completed used to wipe `this.sessions` while open() no-op'd
+        // because the ws was still alive — leaving the UI with an empty list.
+        const { client, sockets } = makeClient({ creds: storedCreds });
+        client.connectFromStored(storedCreds);
+        sockets[0].triggerOpen();
+        sockets[0].triggerMessage({
+            type: 'welcome',
+            sessions: [
+                { id: 'A', tool: 'claude', model: null, cwd: '/tmp', createdAt: 1, currentSeq: 0 },
+            ],
+        });
+        expect(client.getSessions().map((s) => s.id)).toEqual(['A']);
+
+        // Second call must not blow away the cached list.
+        client.connectFromStored(storedCreds);
+        expect(client.getSessions().map((s) => s.id)).toEqual(['A']);
+        // And must not have spawned a second socket.
+        expect(sockets).toHaveLength(1);
+    });
+});
+
+describe('SessionClient: refreshSessions', () => {
+    function connected() {
+        const setup = makeClient({ creds: storedCreds });
+        setup.client.connectFromStored(storedCreds);
+        setup.sockets[0].triggerOpen();
+        setup.sockets[0].triggerMessage({ type: 'welcome', sessions: [] });
+        return setup;
+    }
+
+    it('issues a session.list rpc and updates the cached session list', async () => {
+        const { client, sockets } = connected();
+        const seen: Array<{ id: string }[]> = [];
+        client.onSessionsChange((list) => seen.push(list.map((s) => ({ id: s.id }))));
+        // Drop the immediate sync-fire so we can assert just the refresh emit.
+        seen.length = 0;
+
+        const promise = client.refreshSessions();
+
+        // The most recent outbound frame should be the rpc envelope.
+        const sent = sockets[0].lastSent!;
+        expect(sent['type']).toBe('rpc');
+        expect(sent['method']).toBe('session.list');
+        const rpcId = sent['id'] as string;
+
+        sockets[0].triggerMessage({
+            type: 'rpc-response',
+            id: rpcId,
+            result: {
+                sessions: [
+                    { id: 'X', tool: 'claude', model: null, cwd: '/tmp', createdAt: 1, currentSeq: 0 },
+                ],
+            },
+        });
+
+        const result = await promise;
+        expect(result.map((s) => s.id)).toEqual(['X']);
+        expect(client.getSessions().map((s) => s.id)).toEqual(['X']);
+        expect(seen.at(-1)).toEqual([{ id: 'X' }]);
+    });
+
+    it('returns the cached list without sending an rpc when not connected', async () => {
+        const { client, sockets } = makeClient();
+        const result = await client.refreshSessions();
+        expect(result).toEqual([]);
+        expect(sockets).toHaveLength(0);
+    });
 });
 
 describe('SessionClient: message handling', () => {

@@ -65,6 +65,7 @@ export class SessionClient {
     private storedCredentials: StoredCredentials | null = null;
     private lastSeqs: Record<string, number> = {};
     private sessions: ChatSessionMeta[] = [];
+    private refreshRpcCounter = 0;
     private lastIncomingAt = 0;
     private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
     private visibilityHandler: (() => void) | null = null;
@@ -108,6 +109,18 @@ export class SessionClient {
     }
 
     connectFromStored(creds: StoredCredentials): void {
+        // Idempotent when we're already live on the same credential. Without
+        // this short-circuit, a second call (e.g. user clicks "恢复连接" after
+        // the App's auto-reconnect has already finished) wipes `this.sessions`
+        // and `lastSeqs`, then `open()` no-ops because the ws still exists —
+        // leaving the UI with an empty list until the agent next pushes a
+        // `sessions` event.
+        if (
+            this.currentStatus === 'connected' &&
+            this.storedCredentials?.sessionCredential === creds.sessionCredential
+        ) {
+            return;
+        }
         this.closed = false;
         this.lastErrorReason = null;
         this.storedCredentials = creds;
@@ -172,6 +185,26 @@ export class SessionClient {
             : -1;
     }
     getSessions(): ChatSessionMeta[] { return this.sessions; }
+
+    /**
+     * Pull the authoritative session list from the agent and update the local
+     * cache. Use this as a recovery path when the cached list might be out of
+     * sync (e.g. after a tab regaining focus, or as a defensive fetch on the
+     * list page). Resolves to the freshly-applied list. No-op (resolves to
+     * the current cache) if not connected.
+     */
+    async refreshSessions(): Promise<ChatSessionMeta[]> {
+        if (this.currentStatus !== 'connected') return this.sessions;
+        const id = `list-${++this.refreshRpcCounter}`;
+        const res = await this.rpc(id, 'session.list');
+        if (res.error) throw new Error(res.error);
+        const result = res.result as { sessions?: ChatSessionMeta[] } | undefined;
+        if (Array.isArray(result?.sessions)) {
+            this.sessions = result.sessions;
+            this.emitSessions();
+        }
+        return this.sessions;
+    }
 
     // ── Credential helpers (proxied to injected storage) ──────────────────────
 

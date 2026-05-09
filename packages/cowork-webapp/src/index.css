@@ -2061,6 +2061,20 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--text);
 }
 
+.session-list-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.icon-spin {
+  animation: icon-spin 0.9s linear infinite;
+}
+
+@keyframes icon-spin {
+  to { transform: rotate(360deg); }
+}
+
 .session-list-body {
   flex: 1;
   display: flex;
