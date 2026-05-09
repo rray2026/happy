@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
- * Imperative wrapper around `window.speechSynthesis`. We don't try to be
- * fancy — the browser already serializes utterances internally; we just
- * push, listen for `end`, and surface a `speaking` flag that polls instead
- * of trusting `onstart` / `onend` (Safari sometimes drops them).
+ * Imperative wrapper around `window.speechSynthesis`.
+ *
+ * `speaking` is *our* truth, derived from utterance lifecycle events we
+ * attach in `speak()`. We deliberately don't poll `speechSynthesis.speaking`
+ * — Chrome occasionally leaves that flag stuck at `true` after `cancel()`,
+ * which used to wedge the voice-mode UI in "朗读中" with no audio and no way
+ * to recover short of switching the mode off. Trusting our own counter
+ * means cancel() can decisively force-clear the local view, regardless of
+ * what the engine reports.
  */
 
 interface Options {
@@ -23,7 +28,7 @@ export interface SpeechSynthesisHandle {
     speak: (text: string) => void;
     cancel: () => void;
     /**
-     * Trigger an empty utterance synchronously inside a user-gesture handler
+     * Trigger a silent utterance synchronously inside a user-gesture handler
      * so the browser unlocks audio output for the rest of the page's life.
      * Without this, Chrome silently fails subsequent off-gesture `speak()`
      * calls with `error: not-allowed` (its autoplay policy treats long-delayed
@@ -39,6 +44,10 @@ export function isSpeechSynthesisSupported(): boolean {
 export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
     const { rate, voiceURI, lang, onError } = opts;
     const [speaking, setSpeaking] = useState(false);
+    /** Number of utterances we've handed to the engine that haven't yet
+     *  emitted onend / onerror / safety-timed-out. Authoritative source for
+     *  the `speaking` boolean. */
+    const inFlightRef = useRef(0);
     const onErrorRef = useRef(onError);
     useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
@@ -53,52 +62,82 @@ export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
             const v = window.speechSynthesis.getVoices().find((v) => v.voiceURI === voiceURI);
             if (v) u.voice = v;
         }
+        // Each utterance settles exactly once, regardless of how the
+        // browser fires its events (some emit onend, some onerror with
+        // 'canceled', some Safari builds drop both). Safety timeout
+        // backstops the rare dropped event so inFlight can't strand.
+        let settled = false;
+        let safetyTimer: ReturnType<typeof setTimeout> | null = null;
+        const settle = () => {
+            if (settled) return;
+            settled = true;
+            if (safetyTimer) {
+                clearTimeout(safetyTimer);
+                safetyTimer = null;
+            }
+            inFlightRef.current = Math.max(0, inFlightRef.current - 1);
+            setSpeaking(inFlightRef.current > 0);
+        };
+        u.onend = settle;
         u.onerror = (e: SpeechSynthesisErrorEvent) => {
+            settle();
             if (e.error === 'canceled' || e.error === 'interrupted') return;
             onErrorRef.current?.(e.error || 'tts error');
         };
+        // Generous backstop: 60s + 200ms per character is ~5x typical
+        // playback time. Only fires if the engine truly dropped its
+        // events — never preempts a real reading.
+        const estMs = Math.max(60_000, text.length * 200);
+        safetyTimer = setTimeout(settle, estMs);
         try {
             window.speechSynthesis.speak(u);
+            inFlightRef.current += 1;
+            setSpeaking(true);
         } catch (err) {
+            // Speak() threw before queuing — undo the bookkeeping we did
+            // optimistically (none yet) and surface the error.
+            settled = true;
+            if (safetyTimer) {
+                clearTimeout(safetyTimer);
+                safetyTimer = null;
+            }
             onErrorRef.current?.(err instanceof Error ? err.message : String(err));
         }
     }, [supported, rate, voiceURI, lang]);
 
     const cancel = useCallback(() => {
         if (!supported) return;
-        window.speechSynthesis.cancel();
+        // Reset *our* truth first. The engine's `cancel()` is best-effort —
+        // we deliberately don't condition our local state on whether it
+        // actually drained, because it sometimes doesn't.
+        inFlightRef.current = 0;
         setSpeaking(false);
+        try {
+            window.speechSynthesis.cancel();
+        } catch {
+            // best-effort
+        }
     }, [supported]);
 
-    /** Synchronously emit a silent utterance to satisfy Chrome's audio
-     *  autoplay gate. Must be called from inside a user-gesture handler
-     *  (e.g. the click that toggles voice mode on). */
     const prime = useCallback(() => {
         if (!supported) return;
         try {
             const u = new SpeechSynthesisUtterance(' ');
             u.volume = 0;
+            // Deliberately NOT tracked in inFlightRef — prime is fire-and-
+            // forget for the autoplay unlock; counting it would flicker
+            // phase to "speaking" the moment voice mode turns on.
             window.speechSynthesis.speak(u);
         } catch {
             // best-effort
         }
     }, [supported]);
 
-    // `speechSynthesis.speaking` is the truth — poll it. The native onend /
-    // onstart fire inconsistently across browsers and per-utterance, but we
-    // only care whether *any* utterance is currently being synthesized.
-    useEffect(() => {
-        if (!supported) return;
-        const iv = setInterval(() => {
-            const isSpeaking = window.speechSynthesis.speaking || window.speechSynthesis.pending;
-            setSpeaking((prev) => (prev !== isSpeaking ? isSpeaking : prev));
-        }, 200);
-        return () => clearInterval(iv);
-    }, [supported]);
-
     // Hard stop on unmount so a navigation doesn't leave the page chattering.
     useEffect(() => () => {
-        if (supported) window.speechSynthesis.cancel();
+        if (!supported) return;
+        inFlightRef.current = 0;
+        try { window.speechSynthesis.cancel(); } catch { /* noop */ }
     }, [supported]);
 
     return { supported, speaking, speak, cancel, prime };

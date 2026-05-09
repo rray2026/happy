@@ -342,17 +342,12 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             return;
         }
         // Don't listen while the agent is replying or while we're reading
-        // its response; otherwise we'll hear our own TTS. We trust the
-        // engine's live `speaking` / `pending` over `tts.speaking` (a 200ms
-        // polled mirror) because there's a window where we've just speak()'d
-        // a batch but the poll hasn't yet flipped React state — re-arming
-        // STT in that window would catch our own playback.
-        const liveSpeaking =
-            typeof window !== 'undefined' &&
-            !!window.speechSynthesis &&
-            (window.speechSynthesis.speaking || window.speechSynthesis.pending);
+        // its response — otherwise we'd catch our own TTS. `tts.speaking`
+        // is now event-driven (flips true synchronously inside speak() and
+        // false on onend / cancel), so no need to second-guess via the
+        // engine's live flags.
         const shouldListen =
-            !isBusy && !pendingSend && !tts.speaking && !liveSpeaking && queueLen === 0;
+            !isBusy && !pendingSend && !tts.speaking && queueLen === 0;
         if (shouldListen && !stt.listening) stt.start();
         if (!shouldListen && stt.listening) stt.stop();
     }, [active, suspended, isBusy, pendingSend, tts.speaking, queueLen, stt, cancelSilenceTimer]);
@@ -420,16 +415,12 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     }, [tts, items, skipCode]);
 
     // ── Phase derivation ────────────────────────────────────────────────────
-    // Read the engine state directly so phase doesn't flicker through
-    // `listening` between the moment we speak() a batch and the moment
-    // polling flips `tts.speaking` to true.
-    const liveSpeakingNow =
-        typeof window !== 'undefined' &&
-        !!window.speechSynthesis &&
-        (window.speechSynthesis.speaking || window.speechSynthesis.pending);
+    // `tts.speaking` is our authoritative "an utterance is in flight"
+    // signal — flipped true synchronously inside speak() and force-cleared
+    // by cancel(), so no polling lag and no engine-state stickiness.
     let phase: VoicePhase;
     if (!active || suspended) phase = 'idle';
-    else if (tts.speaking || liveSpeakingNow || queueLen > 0) phase = 'speaking';
+    else if (tts.speaking || queueLen > 0) phase = 'speaking';
     else if (isBusy || pendingSend) phase = 'thinking';
     else if (silenceCountdown) phase = 'pending';
     else phase = 'listening';
