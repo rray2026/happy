@@ -20,6 +20,10 @@ export interface VoiceModeOptions {
     ttsRate?: number;
     /** Extra silence after browser onend before we send (default 2500ms). */
     silenceMs?: number;
+    /** Optional wake-word: when an utterance ends with this phrase, send
+     *  immediately without waiting for the silence buffer. Matched after
+     *  normalizing whitespace/punctuation. Empty = disabled. */
+    sendTrigger?: string;
     /** Strip code blocks from TTS output. */
     skipCode?: boolean;
     /** Play a "ping" cue when a tool call appears in the stream. */
@@ -78,6 +82,35 @@ function cleanForSpeech(text: string, skipCode: boolean): string {
     return out;
 }
 
+/**
+ * Strip whitespace and punctuation, lowercase, so a wake-word check ignores
+ * things like "发送、发送" / "发送 发送" / "Send, send." / extra trailing
+ * periods. Keeps letters, digits, and CJK.
+ */
+function normalizeForTrigger(s: string): string {
+    return s.toLowerCase().replace(/[\s\p{P}]+/gu, '');
+}
+
+/**
+ * If `transcript` ends with `trigger` (after normalization), return the
+ * transcript with the trigger portion removed. Otherwise return null.
+ */
+function stripTrailingTrigger(transcript: string, trigger: string): string | null {
+    const triggerNorm = normalizeForTrigger(trigger);
+    if (!triggerNorm) return null;
+    const transcriptNorm = normalizeForTrigger(transcript);
+    if (!transcriptNorm.endsWith(triggerNorm)) return null;
+    // Walk the original right-to-left, peeling one character at a time, until
+    // the remainder's normalized form no longer ends with the trigger. The
+    // peeled tail is the trigger plus any whitespace/punctuation surrounding
+    // it — exactly what we want to drop.
+    let end = transcript.length;
+    while (end > 0 && normalizeForTrigger(transcript.slice(0, end)).endsWith(triggerNorm)) {
+        end--;
+    }
+    return transcript.slice(0, end).trim();
+}
+
 /** First chunk-end position after `start`, or -1 if we should wait for more text. */
 function findChunkEnd(text: string, start: number, fallbackAfter = 60): number {
     let lastStrong = -1;
@@ -116,6 +149,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         ttsVoice,
         ttsRate,
         silenceMs = 2500,
+        sendTrigger,
         skipCode = true,
         toolCue = true,
         onError,
@@ -249,6 +283,24 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         onTranscript: (text, final) => {
             if (!final) return;
             transcriptRef.current = (transcriptRef.current + ' ' + text).trim();
+
+            // Wake-word fast-path: if the user said the configured trigger
+            // at the tail of the utterance, send immediately and skip the
+            // silence wait.
+            if (sendTrigger) {
+                const stripped = stripTrailingTrigger(transcriptRef.current, sendTrigger);
+                if (stripped !== null) {
+                    cancelSilenceTimer();
+                    transcriptRef.current = '';
+                    if (stripped && active && !suspended) {
+                        sessionClient.sendInput(sessionId, stripped);
+                        sessionClient.appendOptimisticUser(sessionId, stripped);
+                        setPendingSend(true);
+                    }
+                    return;
+                }
+            }
+
             // Reset silence timer on every final chunk.
             cancelSilenceTimer();
             silenceTimerRef.current = setTimeout(() => {

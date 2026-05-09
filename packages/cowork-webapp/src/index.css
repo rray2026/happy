@@ -2635,6 +2635,25 @@ button:focus:not(:focus-visible) { outline: none; }
   accent-color: var(--accent);
 }
 
+.settings-text-input {
+  flex-shrink: 0;
+  width: 200px;
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 6px var(--s-3);
+  outline: none;
+}
+.settings-text-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 1px;
+}
+.settings-text-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .settings-item-value-meta {
   font-family: var(--mono);
   font-size: var(--fs-xs);

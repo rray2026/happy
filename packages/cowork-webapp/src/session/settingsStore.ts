@@ -19,6 +19,10 @@ export interface Settings {
     ttsRate?: number;
     /** Voice-mode auto-send silence buffer in ms (after browser onend). Default 2500. */
     silenceMs?: number;
+    /** Wake word that, when said at the end of an utterance, sends immediately
+     *  without waiting for the silence buffer. Empty = disabled.
+     *  Matched after stripping whitespace and punctuation, case-insensitively. */
+    sendTrigger?: string;
     /** Skip fenced + inline code blocks during TTS. Default true. */
     skipCode?: boolean;
     /** Play a short audio cue when the agent invokes a tool (instead of reading it). Default true. */

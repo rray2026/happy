@@ -183,6 +183,21 @@ export function SettingsPage() {
                     />
                 </label>
                 <label className="settings-item settings-item-row">
+                    <Mic size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">发送触发词</span>
+                    <input
+                        type="text"
+                        className="settings-text-input"
+                        placeholder="可选，如 发送发送"
+                        value={settings.sendTrigger ?? ''}
+                        onChange={(e) => updateSettings({ sendTrigger: e.target.value })}
+                        disabled={!voiceSupported}
+                        aria-label="发送触发词"
+                        spellCheck={false}
+                        maxLength={32}
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
                     <ScrollText size={18} className="settings-item-icon" />
                     <span className="settings-item-text">跳过代码块朗读</span>
                     <input

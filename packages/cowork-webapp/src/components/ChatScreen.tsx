@@ -293,6 +293,7 @@ export function ChatScreen() {
         ttsVoice: settings.ttsVoice || undefined,
         ttsRate: settings.ttsRate ?? SETTINGS_DEFAULTS.ttsRate,
         silenceMs: settings.silenceMs ?? SETTINGS_DEFAULTS.silenceMs,
+        sendTrigger: settings.sendTrigger || undefined,
         skipCode: settings.skipCode ?? SETTINGS_DEFAULTS.skipCode,
         toolCue: settings.toolCue ?? SETTINGS_DEFAULTS.toolCue,
         onError: (msg) => showToast(`语音模式：${msg}`, { kind: 'error' }),
