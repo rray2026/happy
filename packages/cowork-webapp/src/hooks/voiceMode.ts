@@ -180,9 +180,12 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             const start = readEndsRef.current.get(item.id) ?? 0;
             // If streaming hasn't yet flipped past prior `start`, nothing new.
             if (cleaned.length <= start) continue;
-            // If the assistant message is finalized, flush whatever's left
-            // even without a sentence terminator at the very end.
-            const isFinal = item.streaming === false || item.streaming === undefined;
+            // Treat the chunk as final when:
+            // - streaming flag explicitly says so, OR
+            // - the item is not from a streaming source (undefined), OR
+            // - the agent itself reports idle (some backends never emit a
+            //   `_final` marker; trust the busy signal as a backstop).
+            const isFinal = item.streaming === false || item.streaming === undefined || !isBusy;
             const end = findChunkEnd(cleaned, start);
             if (end > start) {
                 enqueueTts(cleaned.slice(start, end));
@@ -192,7 +195,26 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 readEndsRef.current.set(item.id, cleaned.length);
             }
         }
-    }, [items, active, suspended, skipCode, toolCue, enqueueTts]);
+    }, [items, active, suspended, skipCode, toolCue, enqueueTts, isBusy]);
+
+    // Stale-stream backstop: if items haven't changed for ~1.5s and we still
+    // have unread assistant text, flush it. This catches agents that fall
+    // silent without ever clearing the streaming flag or busy state.
+    useEffect(() => {
+        if (!active || suspended) return;
+        const t = setTimeout(() => {
+            for (const item of items) {
+                if (item.kind !== 'assistant') continue;
+                const cleaned = cleanForSpeech(item.text, skipCode);
+                const start = readEndsRef.current.get(item.id) ?? 0;
+                if (cleaned.length > start) {
+                    enqueueTts(cleaned.slice(start));
+                    readEndsRef.current.set(item.id, cleaned.length);
+                }
+            }
+        }, 1500);
+        return () => clearTimeout(t);
+    }, [items, active, suspended, skipCode, enqueueTts]);
 
     // Reset read pointers when the session changes — different items, can't
     // carry over. Also reset the cue dedup set.
@@ -306,7 +328,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     let phase: VoicePhase;
     if (!active || suspended) phase = 'idle';
     else if (tts.speaking || queueLen > 0) phase = 'speaking';
-    else if (isBusy) phase = 'thinking';
+    else if (isBusy || pendingSend) phase = 'thinking';
     else phase = 'listening';
 
     return {
