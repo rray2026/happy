@@ -147,17 +147,22 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         setQueueLen(ttsQueueRef.current.length);
     }, []);
 
-    // Drain pump: whenever the queue has work and TTS is idle, kick off the
-    // next utterance. Suspended / inactive paths drain the queue instead.
+    // Drain pump: dump the entire queue into the browser's TTS engine in one
+    // pass. The engine handles serial playback internally, so back-to-back
+    // speak() calls are fine and avoid a race where queueLen drops to 0 a
+    // poll-tick before `tts.speaking` flips true (which would otherwise let
+    // the listening lifecycle re-arm STT mid-TTS).
     useEffect(() => {
         if (!active || suspended) return;
-        if (tts.speaking) return;
-        const next = ttsQueueRef.current.shift();
-        if (next) {
+        if (ttsQueueRef.current.length === 0) return;
+        let pumped = false;
+        while (ttsQueueRef.current.length > 0) {
+            const next = ttsQueueRef.current.shift()!;
             tts.speak(next);
-            setQueueLen(ttsQueueRef.current.length);
+            pumped = true;
         }
-    }, [queueLen, tts.speaking, active, suspended, tts]);
+        if (pumped) setQueueLen(0);
+    }, [queueLen, active, suspended, tts]);
 
     // ── Item-stream → sentence chunker ──────────────────────────────────────
     /** Per-item read pointer in the *cleaned* text coordinate space. */
@@ -276,9 +281,17 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             return;
         }
         // Don't listen while the agent is replying or while we're reading
-        // its response; otherwise we'll hear our own TTS.
+        // its response; otherwise we'll hear our own TTS. We trust the
+        // engine's live `speaking` / `pending` over `tts.speaking` (a 200ms
+        // polled mirror) because there's a window where we've just speak()'d
+        // a batch but the poll hasn't yet flipped React state — re-arming
+        // STT in that window would catch our own playback.
+        const liveSpeaking =
+            typeof window !== 'undefined' &&
+            !!window.speechSynthesis &&
+            (window.speechSynthesis.speaking || window.speechSynthesis.pending);
         const shouldListen =
-            !isBusy && !pendingSend && !tts.speaking && queueLen === 0;
+            !isBusy && !pendingSend && !tts.speaking && !liveSpeaking && queueLen === 0;
         if (shouldListen && !stt.listening) stt.start();
         if (!shouldListen && stt.listening) stt.stop();
     }, [active, suspended, isBusy, pendingSend, tts.speaking, queueLen, stt, cancelSilenceTimer]);
@@ -325,9 +338,16 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     }, [tts, items, skipCode]);
 
     // ── Phase derivation ────────────────────────────────────────────────────
+    // Read the engine state directly so phase doesn't flicker through
+    // `listening` between the moment we speak() a batch and the moment
+    // polling flips `tts.speaking` to true.
+    const liveSpeakingNow =
+        typeof window !== 'undefined' &&
+        !!window.speechSynthesis &&
+        (window.speechSynthesis.speaking || window.speechSynthesis.pending);
     let phase: VoicePhase;
     if (!active || suspended) phase = 'idle';
-    else if (tts.speaking || queueLen > 0) phase = 'speaking';
+    else if (tts.speaking || liveSpeakingNow || queueLen > 0) phase = 'speaking';
     else if (isBusy || pendingSend) phase = 'thinking';
     else phase = 'listening';
 
