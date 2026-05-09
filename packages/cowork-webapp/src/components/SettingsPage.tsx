@@ -228,6 +228,21 @@ export function SettingsPage() {
                     />
                 </label>
                 <label className="settings-item settings-item-row">
+                    <Mic size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">撤销输入触发词</span>
+                    <input
+                        type="text"
+                        className="settings-text-input"
+                        placeholder="可选，如 重来"
+                        value={settings.cancelTrigger ?? ''}
+                        onChange={(e) => updateSettings({ cancelTrigger: e.target.value })}
+                        disabled={!voiceSupported}
+                        aria-label="撤销输入触发词"
+                        spellCheck={false}
+                        maxLength={32}
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
                     <ScrollText size={18} className="settings-item-icon" />
                     <span className="settings-item-text">跳过代码块朗读</span>
                     <input

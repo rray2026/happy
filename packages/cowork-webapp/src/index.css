@@ -2582,17 +2582,46 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--text-tertiary);
 }
 
-.voice-bar-transcript {
-  flex: 1;
-  min-width: 0;
-  font-style: italic;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-left: var(--s-2);
-  padding-left: var(--s-2);
-  border-left: 1px solid var(--border);
+/* Big centered overlay of the live STT preview. Sits in the visual middle
+ * of the chat area so the driver can read it without aiming their eyes —
+ * pointer-events none lets clicks pass through to the messages underneath. */
+.voice-live-transcript {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  max-width: min(86vw, 720px);
+  padding: clamp(14px, 3vw, 28px) clamp(20px, 4vw, 40px);
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  border-radius: var(--r-2xl);
+  font-size: clamp(1.25rem, 3.4vw, 2rem);
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: center;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  word-break: break-word;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  animation: voice-live-fade-in 120ms ease-out;
+}
+.voice-live-transcript-pending {
+  /* Soft pulse once the silence timer is armed — visual cue that the
+   * message is about to send unless the user uses the cancel trigger. */
+  animation: voice-live-fade-in 120ms ease-out, voice-live-pulse 1.4s ease-in-out infinite 200ms;
+  outline: 2px solid rgba(255, 255, 255, 0.25);
+}
+
+@keyframes voice-live-fade-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes voice-live-pulse {
+  0%, 100% { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4); }
+  50%      { box-shadow: 0 12px 50px rgba(255, 255, 255, 0.18), 0 12px 40px rgba(0, 0, 0, 0.4); }
 }
 
 @keyframes voice-bar-pulse {

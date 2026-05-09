@@ -3,8 +3,6 @@ import type { VoicePhase } from '../hooks/voiceMode';
 interface Props {
     phase: VoicePhase;
     suspended: boolean;
-    /** Live STT preview to show alongside the status. Empty hides the preview. */
-    transcript?: string;
 }
 
 const PHASE_TEXT: Record<VoicePhase, string> = {
@@ -18,23 +16,18 @@ const PHASE_TEXT: Record<VoicePhase, string> = {
 /**
  * Thin status banner pinned just under the chat header while voice mode is
  * on. Designed for glance-ability while driving — the dot color and label
- * change is the primary feedback. When the user is actually talking, also
- * surfaces the live transcript so they can verify STT is hearing them.
+ * change is the primary feedback. The actual STT preview lives in the
+ * centered VoiceLiveTranscript overlay so it can be much bigger without
+ * stealing space from the conversation.
  */
-export function VoiceModeBar({ phase, suspended, transcript }: Props) {
+export function VoiceModeBar({ phase, suspended }: Props) {
     if (phase === 'idle' && !suspended) return null;
     const label = suspended ? '已暂停（输入或等待权限）' : PHASE_TEXT[phase];
     const cls = suspended ? 'suspended' : phase;
-    const showTranscript = !!transcript && (phase === 'listening' || phase === 'pending');
     return (
         <div className={`voice-bar voice-bar-${cls}`} role="status" aria-live="polite">
             <span className="voice-bar-dot" aria-hidden="true" />
             <span className="voice-bar-label">{label}</span>
-            {showTranscript && (
-                <span className="voice-bar-transcript" title={transcript}>
-                    {transcript}
-                </span>
-            )}
         </div>
     );
 }

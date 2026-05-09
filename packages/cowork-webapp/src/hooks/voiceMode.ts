@@ -36,6 +36,10 @@ export interface VoiceModeOptions {
      *  the agent's in-flight turn (RPC session.abort). The transcript itself
      *  is discarded. Empty = disabled. */
     abortTrigger?: string;
+    /** Optional wake-word that retracts the currently-captured speech: drops
+     *  the buffer and the silence countdown so the user can start the
+     *  utterance over. Empty = disabled. */
+    cancelTrigger?: string;
     /** Strip code blocks from TTS output. */
     skipCode?: boolean;
     /** Play a "ping" cue when a tool call appears in the stream. */
@@ -237,6 +241,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         sendTrigger,
         stopReadingTrigger,
         abortTrigger,
+        cancelTrigger,
         skipCode = true,
         toolCue = true,
         onError,
@@ -422,6 +427,20 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             // falling-edge effect below scrubs the buffer once the window
             // closes if no trigger ever fired.
             if (isBusy || tts.speaking || queueLen > 0) return;
+
+            // Cancel wake-word: retracts the current capture and the silence
+            // countdown so the user can re-say their message. Only checked
+            // outside the barge-in window — during agent thinking / TTS the
+            // accumulated buffer isn't headed anywhere user-visible anyway.
+            if (cancelTrigger) {
+                const cancelNorm = normalizeForTrigger(cancelTrigger);
+                if (cancelNorm && triggerOccursIn(transcriptRef.current, cancelNorm)) {
+                    cancelSilenceTimer();
+                    transcriptRef.current = '';
+                    setLiveTranscript('');
+                    return;
+                }
+            }
 
             // Wake-word fast-path: if the user said the configured trigger
             // at the tail of the utterance, send immediately and skip the

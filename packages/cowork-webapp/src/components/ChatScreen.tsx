@@ -11,6 +11,7 @@ import { useSessions, useStatus } from '../hooks/session';
 import { useSpeechRecognition } from '../hooks/voice';
 import { useVoiceMode } from '../hooks/voiceMode';
 import { VoiceModeBar } from './VoiceModeBar';
+import { VoiceLiveTranscript } from './VoiceLiveTranscript';
 import { VoiceStopButton } from './VoiceStopButton';
 import { clearDraft, getDraft, setDraft } from '../session/draftStore';
 import { SETTINGS_DEFAULTS, useSettings } from '../session/settingsStore';
@@ -296,6 +297,7 @@ export function ChatScreen() {
         sendTrigger: settings.sendTrigger || undefined,
         stopReadingTrigger: settings.stopReadingTrigger || undefined,
         abortTrigger: settings.abortTrigger || undefined,
+        cancelTrigger: settings.cancelTrigger || undefined,
         skipCode: settings.skipCode ?? SETTINGS_DEFAULTS.skipCode,
         toolCue: settings.toolCue ?? SETTINGS_DEFAULTS.toolCue,
         onError: (msg) => showToast(`语音模式：${msg}`, { kind: 'error' }),
@@ -565,9 +567,18 @@ export function ChatScreen() {
                     <VoiceModeBar
                         phase={voiceMode.phase}
                         suspended={voiceMode.suspended}
-                        transcript={voiceMode.liveTranscript}
                     />
                 )}
+                <VoiceLiveTranscript
+                    transcript={voiceMode.liveTranscript}
+                    visible={
+                        voiceMode.active &&
+                        !voiceMode.suspended &&
+                        (voiceMode.phase === 'listening' || voiceMode.phase === 'pending')
+                    }
+                    pending={voiceMode.phase === 'pending'}
+                />
+
 
                 <div
                     className="chat-messages"

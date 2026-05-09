@@ -31,6 +31,11 @@ export interface Settings {
      *  in-flight turn (RPC session.abort). The transcript is discarded.
      *  Empty = disabled. Same normalization rules as sendTrigger. */
     abortTrigger?: string;
+    /** Wake word to retract the currently-captured input: drops the buffered
+     *  transcript and the silence countdown so the user can re-say their
+     *  message without it ever leaving the device. Empty = disabled.
+     *  Same normalization rules as sendTrigger. */
+    cancelTrigger?: string;
     /** Skip fenced + inline code blocks during TTS. Default true. */
     skipCode?: boolean;
     /** Play a short audio cue when the agent invokes a tool (instead of reading it). Default true. */
