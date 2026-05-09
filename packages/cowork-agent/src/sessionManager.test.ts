@@ -290,6 +290,13 @@ describe('SessionManager — claude channel path', () => {
         // sessionsChanged should have fired at least twice: once on dispatch (pending changed),
         // once on result (busy reset).
         expect(h.sessionsChanges.length).toBeGreaterThanOrEqual(2);
+
+        // Regression: the result-event emit used to read isBusy() before the
+        // channel cleared inFlight, sending busy=true and stranding the client.
+        // The most recent emit must reflect the settled state.
+        const latest = h.sessionsChanges[h.sessionsChanges.length - 1];
+        const latestForSession = latest.find((m) => m.id === meta.id)!;
+        expect(latestForSession.busy).toBe(false);
     });
 
     it('queues a second handleInput while the first turn is in flight', async () => {

@@ -274,6 +274,7 @@ export class SessionManager {
                 return;
             }
             entry.agentBusy = true;
+            this.emitSessionsChanged();
             try {
                 await entry.geminiSession.sendPrompt(text);
                 this.appendAndBroadcast(sessionId, {
@@ -290,6 +291,7 @@ export class SessionManager {
                 });
             } finally {
                 entry.agentBusy = false;
+                this.emitSessionsChanged();
             }
             return;
         }
@@ -313,6 +315,7 @@ export class SessionManager {
             return;
         }
         entry.agentBusy = true;
+        this.emitSessionsChanged();
         try {
             await runClaudeProcess({
                 prompt: text,
@@ -332,6 +335,7 @@ export class SessionManager {
             });
         } finally {
             entry.agentBusy = false;
+            this.emitSessionsChanged();
         }
     }
 
@@ -344,9 +348,13 @@ export class SessionManager {
             onEvent: (e) => {
                 this.appendAndBroadcast(entry.id, e);
                 // result events flip busy → idle (or to next queued turn);
-                // session list metadata needs refresh either way.
+                // session list metadata needs refresh either way. Defer the
+                // emit one microtask so it runs AFTER ClaudeChannel itself
+                // clears `inFlight` post-result — otherwise emitSessionsChanged
+                // reads the stale isBusy()=true and the client gets stuck on
+                // busy=true.
                 if ((e as { type?: string }).type === 'result') {
-                    this.emitSessionsChanged();
+                    queueMicrotask(() => this.emitSessionsChanged());
                 }
             },
             onSessionId: (cid) => {
