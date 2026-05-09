@@ -107,35 +107,34 @@ function cleanForSpeech(text: string, skipCode: boolean): string {
 }
 
 /**
- * Strip whitespace and punctuation, lowercase, then convert any Chinese
- * characters to toneless pinyin. So homophone misrecognitions still match —
- * "停止" / "停滞" / "庭制" all normalize to "tingzhi" — which is the whole
- * point: Web Speech is shaky on Chinese tones and similar-sound chars, and
- * we don't want a wake-word to silently miss because the engine guessed
- * the wrong character.
+ * Strip whitespace and punctuation, lowercase, then run pinyin in array mode
+ * over the whole stripped string. The array mode is what lets polyphones
+ * resolve in context — `了` in "别说了" → "le", but `pinyin('了')` alone
+ * defaults to "liao". If we converted char by char we'd get a different form
+ * for the trigger and the transcript and the match would silently miss.
  *
- * Non-Chinese characters (latin letters, digits) pass through unchanged.
+ * Each entry corresponds to one source character of the stripped string, so
+ * concatenating gives the canonical normalized form and matchers that need
+ * char-boundary alignment can iterate the array directly.
+ *
+ * Non-Chinese characters (latin letters, digits) pass through unchanged as
+ * single-char entries.
  */
-function normalizeForTrigger(s: string): string {
+function pinyinArrayOf(s: string): string[] {
     const stripped = s.toLowerCase().replace(/[\s\p{P}]+/gu, '');
-    if (!stripped) return '';
-    return pinyin(stripped, { toneType: 'none', type: 'string', separator: '' }).toLowerCase();
+    if (!stripped) return [];
+    return pinyin(stripped, { toneType: 'none', type: 'array' }).map((p) => p.toLowerCase());
 }
 
 /**
- * Per-character normalized form of `s`, skipping whitespace and punctuation.
- * Each entry is one source character's pinyin (or the raw lowercase char for
- * non-Chinese) — preserves char boundaries so trigger matching can require
- * boundary alignment ("停" → "ting" must match the trigger as a whole, not
- * partial sub-strings like "ing").
+ * Canonical pinyin form: ws/punct stripped, lowercased, Chinese → toneless
+ * pinyin. So homophone misrecognitions still match — "停止" / "停滞" / "庭制"
+ * all normalize to "tingzhi" — which is the whole point: Web Speech is shaky
+ * on Chinese tones and similar-sound chars, and we don't want a wake-word to
+ * silently miss because the engine guessed the wrong character.
  */
-function perCharNormalized(s: string): string[] {
-    const out: string[] = [];
-    for (const c of s) {
-        const cn = normalizeForTrigger(c);
-        if (cn) out.push(cn);
-    }
-    return out;
+export function normalizeForTrigger(s: string): string {
+    return pinyinArrayOf(s).join('');
 }
 
 /**
@@ -143,9 +142,9 @@ function perCharNormalized(s: string): string[] {
  * characters in `transcript` normalizes exactly to `triggerNorm`. Prevents
  * accidents like trigger "ing" matching the tail of "停" (pinyin "ting").
  */
-function triggerOccursIn(transcript: string, triggerNorm: string): boolean {
+export function triggerOccursIn(transcript: string, triggerNorm: string): boolean {
     if (!triggerNorm) return false;
-    const chars = perCharNormalized(transcript);
+    const chars = pinyinArrayOf(transcript);
     for (let i = 0; i < chars.length; i++) {
         let acc = '';
         for (let j = i; j < chars.length; j++) {
@@ -162,23 +161,35 @@ function triggerOccursIn(transcript: string, triggerNorm: string): boolean {
  * normalization), return the transcript with the trigger portion removed.
  * Otherwise return null.
  *
- * Walks the original right-to-left, prepending each char's normalized form
- * to a buffer until it equals the trigger exactly. Bailing on length-overshoot
- * enforces char-boundary alignment, so a short trigger like "zhi" can't false-
- * match the tail of a single longer-pinyin char.
+ * Walks per-char pinyin from the tail, accumulating until the suffix equals
+ * the normalized trigger. Bailing on length-overshoot enforces char-boundary
+ * alignment, so a short trigger like "zhi" can't false-match the tail of a
+ * single longer-pinyin char. The boundary index is mapped back to the
+ * original-string position via origIdx so we can slice the user's actual
+ * pre-trigger message out cleanly.
  */
-function stripTrailingTrigger(transcript: string, trigger: string): string | null {
+export function stripTrailingTrigger(transcript: string, trigger: string): string | null {
     const triggerNorm = normalizeForTrigger(trigger);
     if (!triggerNorm) return null;
-    let i = transcript.length;
+
+    let stripped = '';
+    const origIdx: number[] = [];
+    for (let i = 0; i < transcript.length; i++) {
+        const c = transcript[i];
+        if (!/[\s\p{P}]/u.test(c)) {
+            stripped += c.toLowerCase();
+            origIdx.push(i);
+        }
+    }
+    if (!stripped) return null;
+    const chars = pinyin(stripped, { toneType: 'none', type: 'array' }).map((p) => p.toLowerCase());
+
     let suffix = '';
-    while (i > 0) {
-        i--;
-        const cn = normalizeForTrigger(transcript[i]);
-        if (!cn) continue;
-        suffix = cn + suffix;
+    for (let k = chars.length - 1; k >= 0; k--) {
+        suffix = chars[k] + suffix;
         if (suffix === triggerNorm) {
-            return transcript.slice(0, i).replace(/[\s\p{P}]+$/u, '').trim();
+            const cutAt = origIdx[k];
+            return transcript.slice(0, cutAt).replace(/[\s\p{P}]+$/u, '').trim();
         }
         if (suffix.length > triggerNorm.length) return null;
     }
@@ -375,12 +386,13 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             setLiveTranscript(transcriptRef.current);
 
             // Interrupt wake-words: matched anywhere (not just tail) on a
-            // char boundary. Stop-reading cancels TTS only; abort cancels the
-            // agent's in-flight turn. They're independent so users can pick
-            // distinct phrases for each. Both discard the transcript and bail
-            // before the sendTrigger check, so an utterance like "停止 发送"
-            // can't accidentally send.
-            const stopReadingNorm = stopReadingTrigger ? normalizeForTrigger(stopReadingTrigger) : '';
+            // char boundary. stopReadingTrigger only makes sense when there's
+            // TTS to stop, so it's gated on `mode === 'full'`. abortTrigger
+            // works in both modes (input mode can still abort a thinking
+            // agent). Both bail before the sendTrigger check so a phrase like
+            // "停止 发送" can't accidentally send.
+            const stopReadingNorm =
+                mode === 'full' && stopReadingTrigger ? normalizeForTrigger(stopReadingTrigger) : '';
             const abortNorm = abortTrigger ? normalizeForTrigger(abortTrigger) : '';
             const matchedStop = !!stopReadingNorm && triggerOccursIn(transcriptRef.current, stopReadingNorm);
             const matchedAbort = !!abortNorm && triggerOccursIn(transcriptRef.current, abortNorm);
@@ -400,6 +412,16 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 }
                 return;
             }
+
+            // Barge-in window: while the agent is replying or TTS is reading
+            // back, STT stays alive (so triggers can fire), but non-trigger
+            // captures don't get queued for sending — stacking another turn
+            // on top of the in-flight one isn't what the user wants. We keep
+            // accumulating into transcriptRef so that a multi-chunk trigger
+            // ("别"+"说"+"了") can still match across STT events; the
+            // falling-edge effect below scrubs the buffer once the window
+            // closes if no trigger ever fired.
+            if (isBusy || tts.speaking || queueLen > 0) return;
 
             // Wake-word fast-path: if the user said the configured trigger
             // at the tail of the utterance, send immediately and skip the
@@ -451,7 +473,13 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     /* eslint-enable react-hooks/set-state-in-effect */
 
     // Listening lifecycle. The recognition API self-stops after silence; we
-    // re-arm it whenever we should be listening but aren't.
+    // re-arm it whenever we should be listening but aren't. We deliberately
+    // keep STT alive during isBusy and TTS readback so the user can interrupt
+    // via wake-word — non-trigger captures during that window are dropped in
+    // onTranscript, and the falling-edge effect scrubs the buffer when the
+    // window closes. The only true pause is `pendingSend` (brief gap between
+    // sendInput and isBusy reflecting), where mic echo of the just-sent
+    // utterance would otherwise feed back as a new transcript.
     /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
         if (!active || suspended) {
@@ -461,16 +489,28 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             if (stt.listening) stt.stop();
             return;
         }
-        // Don't listen while the agent is replying or while we're reading
-        // its response — otherwise we'd catch our own TTS. `tts.speaking`
-        // is now event-driven (flips true synchronously inside speak() and
-        // false on onend / cancel), so no need to second-guess via the
-        // engine's live flags.
-        const shouldListen =
-            !isBusy && !pendingSend && !tts.speaking && queueLen === 0;
+        const shouldListen = !pendingSend;
         if (shouldListen && !stt.listening) stt.start();
         if (!shouldListen && stt.listening) stt.stop();
-    }, [active, suspended, isBusy, pendingSend, tts.speaking, queueLen, stt, cancelSilenceTimer]);
+    }, [active, suspended, pendingSend, stt, cancelSilenceTimer]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    // Falling-edge of the barge-in window: once the agent stops thinking and
+    // TTS finishes, drop anything we accumulated during it. That speech was
+    // either a trigger (already handled) or non-trigger noise we agreed to
+    // discard — keeping it would let stale fragments combine with the next
+    // utterance into a spurious silence-timer send.
+    const prevBargeinRef = useRef(false);
+    /* eslint-disable react-hooks/set-state-in-effect */
+    useEffect(() => {
+        const bargein = isBusy || tts.speaking || queueLen > 0;
+        if (prevBargeinRef.current && !bargein) {
+            transcriptRef.current = '';
+            setLiveTranscript('');
+            cancelSilenceTimer();
+        }
+        prevBargeinRef.current = bargein;
+    }, [isBusy, tts.speaking, queueLen, cancelSilenceTimer]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
     // ── Suspended / inactive / non-full-mode cleanup ───────────────────────
@@ -510,10 +550,16 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             setActive(false);
             return;
         }
-        // Either turning on, or switching mode while already on. Either way,
-        // mark every existing assistant item as fully read and every tool call
-        // as already cued — otherwise the chunker would replay the entire
-        // visible history the next time TTS is enabled.
+        if (active) {
+            // Cross-mode switch is disallowed: user must turn off first, then
+            // pick the other mode. Forcing transitions through the off state
+            // makes the audio lifecycle (TTS prime, queue drain) deterministic
+            // and the UI's "which mode am I in" easy to reason about.
+            return;
+        }
+        // Entering from off. Mark every existing assistant item as fully read
+        // and every tool call as already cued — otherwise the chunker would
+        // replay the entire visible history when TTS turns on.
         for (const item of items) {
             if (item.kind === 'assistant') {
                 const cleaned = cleanForSpeech(item.text, skipCode);

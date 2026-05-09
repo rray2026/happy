@@ -491,7 +491,14 @@ export function ChatScreen() {
                                 onClick={() => voiceMode.toggleMode('input')}
                                 aria-label={voiceMode.active && voiceMode.mode === 'input' ? '关闭语音输入' : '开启语音输入'}
                                 aria-pressed={voiceMode.active && voiceMode.mode === 'input'}
-                                title={voiceMode.active && voiceMode.mode === 'input' ? '关闭语音输入' : '开启语音输入（连续听写，无朗读）'}
+                                title={
+                                    voiceMode.active && voiceMode.mode === 'input'
+                                        ? '关闭语音输入'
+                                        : voiceMode.active
+                                            ? '请先关闭语音模式'
+                                            : '开启语音输入（连续听写，无朗读）'
+                                }
+                                disabled={voiceMode.active && voiceMode.mode !== 'input'}
                             >
                                 <Mic size={20} />
                             </button>
@@ -503,7 +510,14 @@ export function ChatScreen() {
                                 onClick={() => voiceMode.toggleMode('full')}
                                 aria-label={voiceMode.active && voiceMode.mode === 'full' ? '关闭语音模式' : '开启语音模式'}
                                 aria-pressed={voiceMode.active && voiceMode.mode === 'full'}
-                                title={voiceMode.active && voiceMode.mode === 'full' ? '关闭语音模式' : '开启语音模式（连续听-说-读）'}
+                                title={
+                                    voiceMode.active && voiceMode.mode === 'full'
+                                        ? '关闭语音模式'
+                                        : voiceMode.active
+                                            ? '请先关闭语音输入'
+                                            : '开启语音模式（连续听-说-读）'
+                                }
+                                disabled={voiceMode.active && voiceMode.mode !== 'full'}
                             >
                                 <Headphones size={20} />
                             </button>
