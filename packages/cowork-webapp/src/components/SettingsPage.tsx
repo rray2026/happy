@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight, Mic } from 'lucide-react';
+import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight, Mic, Headphones } from 'lucide-react';
 import { sessionClient } from '../session';
 import { Modal } from './Modal';
 import { LogsModal } from './LogsModal';
 import { SessionTransferModal } from './SessionTransferModal';
-import { updateSettings, useSettings } from '../session/settingsStore';
+import { SETTINGS_DEFAULTS, updateSettings, useSettings } from '../session/settingsStore';
 import { isSpeechRecognitionSupported } from '../hooks/voice';
+import { isSpeechSynthesisSupported, useTtsVoices } from '../hooks/tts';
 
 const VOICE_LANG_OPTIONS: ReadonlyArray<{
     label: string;
@@ -46,6 +47,19 @@ export function SettingsPage() {
     const stored = sessionClient.loadStoredCredentials();
     const settings = useSettings();
     const voiceSupported = isSpeechRecognitionSupported();
+    const ttsSupported = isSpeechSynthesisSupported();
+    const ttsVoices = useTtsVoices();
+    // Filter the voice list down to "matches user's recognition language"
+    // when one is set, otherwise show all installed voices. Browsers ship
+    // 50+ voices on macOS; the unfiltered list is unwieldy.
+    const langPrefix = (settings.voiceLang || '').split('-')[0];
+    const filteredVoices = langPrefix
+        ? ttsVoices.filter((v) => v.lang.toLowerCase().startsWith(langPrefix.toLowerCase()))
+        : ttsVoices;
+    const ttsRate = settings.ttsRate ?? SETTINGS_DEFAULTS.ttsRate;
+    const silenceMs = settings.silenceMs ?? SETTINGS_DEFAULTS.silenceMs;
+    const skipCode = settings.skipCode ?? SETTINGS_DEFAULTS.skipCode;
+    const toolCue = settings.toolCue ?? SETTINGS_DEFAULTS.toolCue;
 
     const [logsOpen, setLogsOpen] = useState(false);
     const [transferOpen, setTransferOpen] = useState(false);
@@ -109,6 +123,88 @@ export function SettingsPage() {
                 {!voiceSupported && (
                     <div className="settings-item-note">
                         当前浏览器不支持 Web Speech API（如 Firefox），切换到 Chrome / Edge / Safari 后可启用麦克风输入。
+                    </div>
+                )}
+            </div>
+
+            <div className="settings-section">
+                <div className="settings-section-title">
+                    <Headphones size={13} />
+                    语音模式
+                </div>
+                <label className="settings-item settings-item-row">
+                    <Headphones size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">朗读音色</span>
+                    <select
+                        className="settings-select"
+                        value={settings.ttsVoice ?? ''}
+                        onChange={(e) => updateSettings({ ttsVoice: e.target.value })}
+                        disabled={!ttsSupported}
+                        aria-label="朗读音色"
+                    >
+                        <option value="">浏览器默认</option>
+                        {filteredVoices.map((v) => (
+                            <option key={v.voiceURI} value={v.voiceURI}>
+                                {v.name}{v.localService ? '' : '（云端）'} · {v.lang}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Headphones size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">朗读语速</span>
+                    <span className="settings-item-value-meta">{ttsRate.toFixed(1)}×</span>
+                    <input
+                        type="range"
+                        className="settings-slider"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={ttsRate}
+                        onChange={(e) => updateSettings({ ttsRate: Number(e.target.value) })}
+                        disabled={!ttsSupported}
+                        aria-label="朗读语速"
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
+                    <Mic size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">静默后自动发送</span>
+                    <span className="settings-item-value-meta">{(silenceMs / 1000).toFixed(1)}s</span>
+                    <input
+                        type="range"
+                        className="settings-slider"
+                        min={500}
+                        max={4000}
+                        step={250}
+                        value={silenceMs}
+                        onChange={(e) => updateSettings({ silenceMs: Number(e.target.value) })}
+                        disabled={!voiceSupported}
+                        aria-label="静默后自动发送时长"
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
+                    <ScrollText size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">跳过代码块朗读</span>
+                    <input
+                        type="checkbox"
+                        className="settings-toggle"
+                        checked={skipCode}
+                        onChange={(e) => updateSettings({ skipCode: e.target.checked })}
+                    />
+                </label>
+                <label className="settings-item settings-item-row">
+                    <ScrollText size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">工具调用提示音</span>
+                    <input
+                        type="checkbox"
+                        className="settings-toggle"
+                        checked={toolCue}
+                        onChange={(e) => updateSettings({ toolCue: e.target.checked })}
+                    />
+                </label>
+                {!ttsSupported && (
+                    <div className="settings-item-note">
+                        当前浏览器不支持 SpeechSynthesis API，无法朗读 agent 回答。
                     </div>
                 )}
             </div>

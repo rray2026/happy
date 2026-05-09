@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo, useSyncExternalStore, useLayoutEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, Square, Mic } from 'lucide-react';
+import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, Square, Mic, Headphones } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { Item, PermissionEvent, ToolCall } from '../types';
 import { uid } from '../session/events';
@@ -9,8 +9,11 @@ import { defaultName } from '../session/displayHelpers';
 import { useEscape, useScrollLock } from '../hooks/overlay';
 import { useSessions, useStatus } from '../hooks/session';
 import { useSpeechRecognition } from '../hooks/voice';
+import { useVoiceMode } from '../hooks/voiceMode';
+import { VoiceModeBar } from './VoiceModeBar';
+import { VoiceStopButton } from './VoiceStopButton';
 import { clearDraft, getDraft, setDraft } from '../session/draftStore';
-import { useSettings } from '../session/settingsStore';
+import { SETTINGS_DEFAULTS, useSettings } from '../session/settingsStore';
 import { dismissToast, showToast } from '../toast/toastStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
@@ -277,6 +280,24 @@ export function ChatScreen() {
         return parts.join(' ');
     }, []);
     const settings = useSettings();
+    // Hands-free voice loop. Listens / sends / reads back / re-listens for
+    // the active session; suspended whenever the user is typing or a
+    // permission request is awaiting their click.
+    const voiceMode = useVoiceMode({
+        sessionId,
+        items,
+        isBusy,
+        hasInput: input.trim().length > 0,
+        hasPermission: !!permission,
+        voiceLang: settings.voiceLang || undefined,
+        ttsVoice: settings.ttsVoice || undefined,
+        ttsRate: settings.ttsRate ?? SETTINGS_DEFAULTS.ttsRate,
+        silenceMs: settings.silenceMs ?? SETTINGS_DEFAULTS.silenceMs,
+        skipCode: settings.skipCode ?? SETTINGS_DEFAULTS.skipCode,
+        toolCue: settings.toolCue ?? SETTINGS_DEFAULTS.toolCue,
+        onError: (msg) => showToast(`语音模式：${msg}`, { kind: 'error' }),
+    });
+
     const speech = useSpeechRecognition({
         // Empty string means "auto" in the settings store; the hook's own
         // default already falls back to navigator.language.
@@ -460,6 +481,18 @@ export function ChatScreen() {
                     </div>
 
                     <div className="chat-header-actions">
+                        {voiceMode.supported && (
+                            <button
+                                type="button"
+                                className={`icon-btn voice-toggle${voiceMode.active ? ' active' : ''}${voiceMode.suspended ? ' suspended' : ''}`}
+                                onClick={voiceMode.toggle}
+                                aria-label={voiceMode.active ? '关闭语音模式' : '开启语音模式'}
+                                aria-pressed={voiceMode.active}
+                                title={voiceMode.active ? '关闭语音模式' : '开启语音模式（连续听-说-读）'}
+                            >
+                                <Headphones size={20} />
+                            </button>
+                        )}
                         {status === 'connected' && (
                             <button
                                 type="button"
@@ -499,6 +532,10 @@ export function ChatScreen() {
                     </div>
                 </div>
 
+                {voiceMode.active && (
+                    <VoiceModeBar phase={voiceMode.phase} suspended={voiceMode.suspended} />
+                )}
+
                 <div
                     className="chat-messages"
                     ref={messagesRef}
@@ -530,6 +567,11 @@ export function ChatScreen() {
                     <ChevronDown size={20} />
                 </button>
 
+                <VoiceStopButton
+                    visible={voiceMode.active && voiceMode.phase === 'speaking'}
+                    onStop={voiceMode.stopReading}
+                />
+
                 {/* Pending-queue hint (only when prompts queued behind the in-flight turn) */}
                 {pendingCount > 0 && (
                     <div className="chat-pending-hint" aria-live="polite">
@@ -560,7 +602,7 @@ export function ChatScreen() {
                             disabled={status !== 'connected' || !sessionId}
                         />
                     </div>
-                    {speech.supported && (
+                    {speech.supported && !voiceMode.active && (
                         <button
                             type="button"
                             className={`chat-voice-btn${speech.listening ? ' listening' : ''}`}

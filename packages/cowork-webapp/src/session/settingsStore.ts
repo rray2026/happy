@@ -13,7 +13,24 @@ const KEY = 'cowork:settings';
 export interface Settings {
     /** BCP-47 language tag for SpeechRecognition. Empty means "use navigator.language". */
     voiceLang?: string;
+    /** SpeechSynthesisVoice.voiceURI to use for TTS. Empty = browser default. */
+    ttsVoice?: string;
+    /** TTS rate, 0.5–2.0. Defaults to 1.0 when unset. */
+    ttsRate?: number;
+    /** Voice-mode auto-send silence buffer in ms (after browser onend). Default 2500. */
+    silenceMs?: number;
+    /** Skip fenced + inline code blocks during TTS. Default true. */
+    skipCode?: boolean;
+    /** Play a short audio cue when the agent invokes a tool (instead of reading it). Default true. */
+    toolCue?: boolean;
 }
+
+export const SETTINGS_DEFAULTS = {
+    ttsRate: 1.0,
+    silenceMs: 2500,
+    skipCode: true,
+    toolCue: true,
+} as const;
 
 let cache: Settings | null = null;
 const listeners = new Set<() => void>();
@@ -35,7 +52,8 @@ export function updateSettings(patch: Partial<Settings>): void {
     const next: Settings = { ...loadSettings(), ...patch };
     // Drop empty-string optional fields so the persisted JSON stays compact.
     for (const k of Object.keys(next) as (keyof Settings)[]) {
-        if (next[k] === '' || next[k] === undefined) delete next[k];
+        const v = next[k];
+        if (v === '' || v === undefined || v === null) delete next[k];
     }
     cache = next;
     try {
