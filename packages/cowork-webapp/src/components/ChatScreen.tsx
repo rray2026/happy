@@ -487,11 +487,23 @@ export function ChatScreen() {
                         {voiceMode.supported && (
                             <button
                                 type="button"
-                                className={`icon-btn voice-toggle${voiceMode.active ? ' active' : ''}${voiceMode.suspended ? ' suspended' : ''}`}
-                                onClick={voiceMode.toggle}
-                                aria-label={voiceMode.active ? '关闭语音模式' : '开启语音模式'}
-                                aria-pressed={voiceMode.active}
-                                title={voiceMode.active ? '关闭语音模式' : '开启语音模式（连续听-说-读）'}
+                                className={`icon-btn voice-toggle${voiceMode.active && voiceMode.mode === 'input' ? ' active' : ''}${voiceMode.active && voiceMode.mode === 'input' && voiceMode.suspended ? ' suspended' : ''}`}
+                                onClick={() => voiceMode.toggleMode('input')}
+                                aria-label={voiceMode.active && voiceMode.mode === 'input' ? '关闭语音输入' : '开启语音输入'}
+                                aria-pressed={voiceMode.active && voiceMode.mode === 'input'}
+                                title={voiceMode.active && voiceMode.mode === 'input' ? '关闭语音输入' : '开启语音输入（连续听写，无朗读）'}
+                            >
+                                <Mic size={20} />
+                            </button>
+                        )}
+                        {voiceMode.supported && voiceMode.ttsSupported && (
+                            <button
+                                type="button"
+                                className={`icon-btn voice-toggle${voiceMode.active && voiceMode.mode === 'full' ? ' active' : ''}${voiceMode.active && voiceMode.mode === 'full' && voiceMode.suspended ? ' suspended' : ''}`}
+                                onClick={() => voiceMode.toggleMode('full')}
+                                aria-label={voiceMode.active && voiceMode.mode === 'full' ? '关闭语音模式' : '开启语音模式'}
+                                aria-pressed={voiceMode.active && voiceMode.mode === 'full'}
+                                title={voiceMode.active && voiceMode.mode === 'full' ? '关闭语音模式' : '开启语音模式（连续听-说-读）'}
                             >
                                 <Headphones size={20} />
                             </button>

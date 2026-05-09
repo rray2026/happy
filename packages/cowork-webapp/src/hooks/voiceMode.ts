@@ -7,6 +7,9 @@ import { useSpeechSynthesis } from './tts';
 import { playToolCue } from '../audio/cue';
 
 export type VoicePhase = 'idle' | 'listening' | 'pending' | 'thinking' | 'speaking';
+/** Voice mode variant. `full` = STT + TTS (hands-free); `input` = STT only,
+ *  agent replies render visually but aren't read aloud. */
+export type VoiceModeKind = 'full' | 'input';
 
 export interface VoiceModeOptions {
     sessionId: string;
@@ -43,17 +46,26 @@ export interface VoiceModeOptions {
 export interface VoiceModeHandle {
     /** True when the user has switched voice mode on for this session. */
     active: boolean;
+    /** Selected variant; meaningful only when `active`. */
+    mode: VoiceModeKind;
     /** Live phase. `idle` includes "off" and "suspended"; check `suspended` to disambiguate. */
     phase: VoicePhase;
     /** True while active but blocked (typing / permission modal). */
     suspended: boolean;
-    /** True when the underlying APIs (STT + TTS) are both available. */
+    /** True when the underlying APIs are available. STT alone is required for
+     *  `input` mode; TTS is additionally required for `full` mode. */
     supported: boolean;
+    /** True when TTS is also available — gates the `full` mode button in the UI. */
+    ttsSupported: boolean;
     /** Live transcription preview: finalised words plus the current interim
      *  hypothesis. Cleared on send / stop / cancel. Empty when not listening. */
     liveTranscript: string;
     setActive: (next: boolean) => void;
-    toggle: () => void;
+    /** UI tap: switch to `kind` (turning on if off), or turn off if already
+     *  active in that kind. Marks current items as read and primes TTS as
+     *  needed; callers must invoke this synchronously inside a click handler
+     *  so Chrome's autoplay gate sees a user gesture. */
+    toggleMode: (kind: VoiceModeKind) => void;
     /** Cancel current TTS and any pending sentences; voice loop returns to listening. */
     stopReading: () => void;
 }
@@ -220,6 +232,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     } = opts;
 
     const [active, setActive] = useState(false);
+    const [mode, setMode] = useState<VoiceModeKind>('full');
     /** Bridge the gap between sendInput and the server reflecting busy=true,
      *  during which the local recognition would otherwise still be listening
      *  and might capture the tail of our own utterance or the start of TTS. */
@@ -262,7 +275,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     // every parent render just because tts.speaking changed.
     const ttsSpeak = tts.speak;
     useEffect(() => {
-        if (!active || suspended) return;
+        if (!active || suspended || mode !== 'full') return;
         if (ttsQueueRef.current.length === 0) return;
         let pumped = false;
         while (ttsQueueRef.current.length > 0) {
@@ -271,7 +284,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             pumped = true;
         }
         if (pumped) setQueueLen(0);
-    }, [queueLen, active, suspended, ttsSpeak]);
+    }, [queueLen, active, suspended, mode, ttsSpeak]);
 
     // ── Item-stream → sentence chunker ──────────────────────────────────────
     /** Per-item read pointer in the *cleaned* text coordinate space. */
@@ -280,7 +293,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     const cuedToolIdsRef = useRef<Set<string>>(new Set());
 
     useEffect(() => {
-        if (!active || suspended) return;
+        if (!active || suspended || mode !== 'full') return;
         for (const item of items) {
             if (item.kind === 'tools') {
                 if (toolCue && !cuedToolIdsRef.current.has(item.id)) {
@@ -309,13 +322,13 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 readEndsRef.current.set(item.id, cleaned.length);
             }
         }
-    }, [items, active, suspended, skipCode, toolCue, enqueueTts, isBusy]);
+    }, [items, active, suspended, mode, skipCode, toolCue, enqueueTts, isBusy]);
 
     // Stale-stream backstop: if items haven't changed for ~1.5s and we still
     // have unread assistant text, flush it. This catches agents that fall
     // silent without ever clearing the streaming flag or busy state.
     useEffect(() => {
-        if (!active || suspended) return;
+        if (!active || suspended || mode !== 'full') return;
         const t = setTimeout(() => {
             for (const item of items) {
                 if (item.kind !== 'assistant') continue;
@@ -328,7 +341,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             }
         }, 1500);
         return () => clearTimeout(t);
-    }, [items, active, suspended, skipCode, enqueueTts]);
+    }, [items, active, suspended, mode, skipCode, enqueueTts]);
 
     // Reset read pointers when the session changes — different items, can't
     // carry over. Also reset the cue dedup set.
@@ -460,18 +473,23 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     }, [active, suspended, isBusy, pendingSend, tts.speaking, queueLen, stt, cancelSilenceTimer]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
-    // ── Suspended / inactive cleanup ────────────────────────────────────────
+    // ── Suspended / inactive / non-full-mode cleanup ───────────────────────
     /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
-        if (active && !suspended) return;
-        // Drop any pending speech and silence the engine.
-        ttsQueueRef.current = [];
-        setQueueLen(0);
-        if (tts.speaking) tts.cancel();
-        cancelSilenceTimer();
-        transcriptRef.current = '';
-        setLiveTranscript('');
-    }, [active, suspended, tts, cancelSilenceTimer]);
+        // Drain TTS whenever readback shouldn't be running: voice off, suspended,
+        // or active in input-only mode. STT cleanup only fires when we're truly
+        // off or suspended — input mode keeps listening.
+        if (mode !== 'full' || !active || suspended) {
+            ttsQueueRef.current = [];
+            setQueueLen(0);
+            if (tts.speaking) tts.cancel();
+        }
+        if (!active || suspended) {
+            cancelSilenceTimer();
+            transcriptRef.current = '';
+            setLiveTranscript('');
+        }
+    }, [active, suspended, mode, tts, cancelSilenceTimer]);
 
     // ── Session change / unmount: turn off entirely. ────────────────────────
     useEffect(() => {
@@ -487,27 +505,32 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     }, []);
 
     // ── Public controls ─────────────────────────────────────────────────────
-    const toggle = useCallback(() => {
-        if (!active) {
-            // Mark every existing assistant item as fully read and every
-            // existing tool call as already cued — otherwise the chunker
-            // would treat the entire visible history as fresh content and
-            // read it all aloud the moment voice mode turns on.
-            for (const item of items) {
-                if (item.kind === 'assistant') {
-                    const cleaned = cleanForSpeech(item.text, skipCode);
-                    readEndsRef.current.set(item.id, cleaned.length);
-                } else if (item.kind === 'tools') {
-                    cuedToolIdsRef.current.add(item.id);
-                }
+    const toggleMode = useCallback((kind: VoiceModeKind) => {
+        if (active && mode === kind) {
+            setActive(false);
+            return;
+        }
+        // Either turning on, or switching mode while already on. Either way,
+        // mark every existing assistant item as fully read and every tool call
+        // as already cued — otherwise the chunker would replay the entire
+        // visible history the next time TTS is enabled.
+        for (const item of items) {
+            if (item.kind === 'assistant') {
+                const cleaned = cleanForSpeech(item.text, skipCode);
+                readEndsRef.current.set(item.id, cleaned.length);
+            } else if (item.kind === 'tools') {
+                cuedToolIdsRef.current.add(item.id);
             }
+        }
+        if (kind === 'full') {
             // Prime audio synchronously inside the click handler so Chrome's
             // autoplay gate doesn't reject the first off-gesture speak() N
             // seconds later when the agent finally replies.
             tts.prime();
         }
-        setActive((a) => !a);
-    }, [active, items, skipCode, tts]);
+        setMode(kind);
+        setActive(true);
+    }, [active, mode, items, skipCode, tts]);
     const stopReading = useCallback(() => {
         ttsQueueRef.current = [];
         setQueueLen(0);
@@ -535,12 +558,16 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
 
     return {
         active,
+        mode,
         phase,
         suspended,
-        supported: stt.supported && tts.supported,
+        // STT alone is enough for `input` mode; the UI uses `ttsSupported`
+        // to additionally gate the `full` mode button.
+        supported: stt.supported,
+        ttsSupported: tts.supported,
         liveTranscript,
         setActive,
-        toggle,
+        toggleMode,
         stopReading,
     };
 }
