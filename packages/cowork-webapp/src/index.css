@@ -1148,8 +1148,23 @@ button:focus:not(:focus-visible) { outline: none; }
     padding-top: calc(var(--header-h) + var(--safe-top) + var(--s-2));
     padding-bottom: calc(var(--input-bar-h) + var(--safe-bottom) + var(--s-2));
   }
+  /* Voice-mode banner stacks below the absolute header on mobile. Without
+   * absolute positioning it would otherwise render at y=0 and disappear
+   * behind the header. */
+  .voice-bar {
+    position: absolute;
+    top: calc(var(--header-h) + var(--safe-top));
+    left: 0; right: 0;
+    z-index: 4;
+    transition: transform var(--t-base) ease, opacity var(--t-base) ease;
+  }
+  .chat-main.voice-mode-active .chat-messages {
+    /* Reserve a second strip for the voice bar so messages don't slide under it. */
+    padding-top: calc(var(--header-h) + var(--safe-top) + 32px + var(--s-2));
+  }
   /* Chrome-hidden: slide bars off-screen */
-  .chat-main.chrome-hidden .chat-header {
+  .chat-main.chrome-hidden .chat-header,
+  .chat-main.chrome-hidden .voice-bar {
     transform: translateY(-100%);
     opacity: 0;
     pointer-events: none;

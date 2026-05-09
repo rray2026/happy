@@ -401,7 +401,7 @@ export function ChatScreen() {
                 aria-hidden="true"
             />
 
-            <div ref={chatMainRef} className="chat-main">
+            <div ref={chatMainRef} className={`chat-main${voiceMode.active ? ' voice-mode-active' : ''}`}>
                 {/* Delete confirmation */}
                 <Modal
                     open={deleteConfirmOpen}
