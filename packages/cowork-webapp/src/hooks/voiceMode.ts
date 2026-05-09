@@ -322,7 +322,17 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     }, []);
 
     // ── Public controls ─────────────────────────────────────────────────────
-    const toggle = useCallback(() => setActive((a) => !a), []);
+    const toggle = useCallback(() => {
+        // Prime audio synchronously inside the click handler when switching
+        // ON, so Chrome's autoplay gate doesn't reject the first off-gesture
+        // speak() N seconds later when the agent finally replies. We read
+        // `active` from the closure (stale by one render at worst) — that's
+        // fine because: A) priming twice is harmless, and B) keeping the
+        // side effect outside the setState updater avoids StrictMode's
+        // double-invocation calling prime twice.
+        if (!active) tts.prime();
+        setActive((a) => !a);
+    }, [active, tts]);
     const stopReading = useCallback(() => {
         ttsQueueRef.current = [];
         setQueueLen(0);

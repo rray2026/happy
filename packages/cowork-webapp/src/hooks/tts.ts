@@ -22,6 +22,14 @@ export interface SpeechSynthesisHandle {
     speaking: boolean;
     speak: (text: string) => void;
     cancel: () => void;
+    /**
+     * Trigger an empty utterance synchronously inside a user-gesture handler
+     * so the browser unlocks audio output for the rest of the page's life.
+     * Without this, Chrome silently fails subsequent off-gesture `speak()`
+     * calls with `error: not-allowed` (its autoplay policy treats long-delayed
+     * TTS as if it weren't user-initiated).
+     */
+    prime: () => void;
 }
 
 export function isSpeechSynthesisSupported(): boolean {
@@ -62,6 +70,20 @@ export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
         setSpeaking(false);
     }, [supported]);
 
+    /** Synchronously emit a silent utterance to satisfy Chrome's audio
+     *  autoplay gate. Must be called from inside a user-gesture handler
+     *  (e.g. the click that toggles voice mode on). */
+    const prime = useCallback(() => {
+        if (!supported) return;
+        try {
+            const u = new SpeechSynthesisUtterance(' ');
+            u.volume = 0;
+            window.speechSynthesis.speak(u);
+        } catch {
+            // best-effort
+        }
+    }, [supported]);
+
     // `speechSynthesis.speaking` is the truth — poll it. The native onend /
     // onstart fire inconsistently across browsers and per-utterance, but we
     // only care whether *any* utterance is currently being synthesized.
@@ -79,7 +101,7 @@ export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
         if (supported) window.speechSynthesis.cancel();
     }, [supported]);
 
-    return { supported, speaking, speak, cancel };
+    return { supported, speaking, speak, cancel, prime };
 }
 
 /**
