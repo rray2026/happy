@@ -188,20 +188,21 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
 
     // Drain pump: dump the entire queue into the browser's TTS engine in one
     // pass. The engine handles serial playback internally, so back-to-back
-    // speak() calls are fine and avoid a race where queueLen drops to 0 a
-    // poll-tick before `tts.speaking` flips true (which would otherwise let
-    // the listening lifecycle re-arm STT mid-TTS).
+    // speak() calls are fine. We depend on `speak` (a stable useCallback)
+    // rather than the whole `tts` object so the pump doesn't re-run on
+    // every parent render just because tts.speaking changed.
+    const ttsSpeak = tts.speak;
     useEffect(() => {
         if (!active || suspended) return;
         if (ttsQueueRef.current.length === 0) return;
         let pumped = false;
         while (ttsQueueRef.current.length > 0) {
             const next = ttsQueueRef.current.shift()!;
-            tts.speak(next);
+            ttsSpeak(next);
             pumped = true;
         }
         if (pumped) setQueueLen(0);
-    }, [queueLen, active, suspended, tts]);
+    }, [queueLen, active, suspended, ttsSpeak]);
 
     // ── Item-stream → sentence chunker ──────────────────────────────────────
     /** Per-item read pointer in the *cleaned* text coordinate space. */

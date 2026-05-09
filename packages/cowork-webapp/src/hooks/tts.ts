@@ -84,10 +84,11 @@ export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
             if (e.error === 'canceled' || e.error === 'interrupted') return;
             onErrorRef.current?.(e.error || 'tts error');
         };
-        // Generous backstop: 60s + 200ms per character is ~5x typical
-        // playback time. Only fires if the engine truly dropped its
-        // events — never preempts a real reading.
-        const estMs = Math.max(60_000, text.length * 200);
+        // Generous backstop: minimum 2 minutes plus 800ms per character to
+        // cover the worst case (rate=0.5 + Chinese voice ≈ 480ms/char) with
+        // ~2x safety margin. Only fires if the engine truly dropped events —
+        // must never preempt a real reading.
+        const estMs = Math.max(120_000, text.length * 800);
         safetyTimer = setTimeout(settle, estMs);
         try {
             window.speechSynthesis.speak(u);
@@ -131,6 +132,35 @@ export function useSpeechSynthesis(opts: Options = {}): SpeechSynthesisHandle {
         } catch {
             // best-effort
         }
+    }, [supported]);
+
+    // Lost-event recovery: tts.speaking is event-driven, but a small fraction
+    // of browsers (chiefly older Safari) occasionally drop both onend and
+    // onerror — we'd then sit on inFlight > 0 until the safety timeout
+    // (minutes). To recover fast without re-introducing the cancel-stickiness
+    // bug from polled state, this loop NEVER pulls speaking back to true; it
+    // can only decrement when the engine has been demonstrably idle for
+    // multiple consecutive checks while we still think a turn is in flight.
+    useEffect(() => {
+        if (!supported) return;
+        let idleStreak = 0;
+        const iv = setInterval(() => {
+            if (inFlightRef.current === 0) { idleStreak = 0; return; }
+            const engineLive =
+                window.speechSynthesis.speaking || window.speechSynthesis.pending;
+            if (engineLive) { idleStreak = 0; return; }
+            idleStreak += 1;
+            if (idleStreak >= 3) {
+                // Engine has been idle for ~3 ticks (~1.5s) while we thought
+                // it was busy. Browser dropped an event — force-settle one
+                // utterance. If more were dropped, the loop fires again next
+                // tick until inFlight drains.
+                inFlightRef.current = Math.max(0, inFlightRef.current - 1);
+                setSpeaking(inFlightRef.current > 0);
+                idleStreak = 0;
+            }
+        }, 500);
+        return () => clearInterval(iv);
     }, [supported]);
 
     // Hard stop on unmount so a navigation doesn't leave the page chattering.
