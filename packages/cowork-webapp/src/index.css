@@ -2566,6 +2566,10 @@ button:focus:not(:focus-visible) { outline: none; }
   background: var(--error);
   animation: voice-bar-pulse 1.4s ease-in-out infinite;
 }
+.voice-bar-pending .voice-bar-dot {
+  background: var(--accent);
+  animation: voice-bar-pulse 0.6s ease-in-out infinite;
+}
 .voice-bar-thinking .voice-bar-dot {
   background: var(--warning);
   animation: voice-bar-pulse 1.4s ease-in-out infinite;

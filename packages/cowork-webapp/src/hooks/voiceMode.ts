@@ -5,7 +5,7 @@ import { useSpeechRecognition } from './voice';
 import { useSpeechSynthesis } from './tts';
 import { playToolCue } from '../audio/cue';
 
-export type VoicePhase = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type VoicePhase = 'idle' | 'listening' | 'pending' | 'thinking' | 'speaking';
 
 export interface VoiceModeOptions {
     sessionId: string;
@@ -126,6 +126,11 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
      *  during which the local recognition would otherwise still be listening
      *  and might capture the tail of our own utterance or the start of TTS. */
     const [pendingSend, setPendingSend] = useState(false);
+    /** True while a silence timer is armed — we have a captured transcript
+     *  and are waiting `silenceMs` of quiet before auto-sending. UI shows
+     *  this as its own phase ("等待发送…") so the user knows their utterance
+     *  was heard and is about to leave. */
+    const [silenceCountdown, setSilenceCountdown] = useState(false);
     const suspended = active && (hasInput || hasPermission);
 
     // ── TTS plumbing ────────────────────────────────────────────────────────
@@ -236,6 +241,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = null;
         }
+        setSilenceCountdown(false);
     }, []);
 
     const stt = useSpeechRecognition({
@@ -247,6 +253,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             cancelSilenceTimer();
             silenceTimerRef.current = setTimeout(() => {
                 silenceTimerRef.current = null;
+                setSilenceCountdown(false);
                 const pending = transcriptRef.current.trim();
                 transcriptRef.current = '';
                 if (pending && active && !suspended) {
@@ -255,6 +262,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                     setPendingSend(true);
                 }
             }, silenceMs);
+            setSilenceCountdown(true);
         },
         onError,
     });
@@ -273,6 +281,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
 
     // Listening lifecycle. The recognition API self-stops after silence; we
     // re-arm it whenever we should be listening but aren't.
+    /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
         if (!active || suspended) {
             cancelSilenceTimer();
@@ -295,6 +304,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         if (shouldListen && !stt.listening) stt.start();
         if (!shouldListen && stt.listening) stt.stop();
     }, [active, suspended, isBusy, pendingSend, tts.speaking, queueLen, stt, cancelSilenceTimer]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     // ── Suspended / inactive cleanup ────────────────────────────────────────
     /* eslint-disable react-hooks/set-state-in-effect */
@@ -369,6 +379,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
     if (!active || suspended) phase = 'idle';
     else if (tts.speaking || liveSpeakingNow || queueLen > 0) phase = 'speaking';
     else if (isBusy || pendingSend) phase = 'thinking';
+    else if (silenceCountdown) phase = 'pending';
     else phase = 'listening';
 
     return {

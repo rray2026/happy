@@ -8,6 +8,7 @@ interface Props {
 const PHASE_TEXT: Record<VoicePhase, string> = {
     idle: '',
     listening: '正在听…',
+    pending: '等待发送…',
     thinking: '思考中…',
     speaking: '朗读中',
 };
