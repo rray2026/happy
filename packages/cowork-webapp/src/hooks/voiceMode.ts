@@ -323,16 +323,26 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
 
     // ── Public controls ─────────────────────────────────────────────────────
     const toggle = useCallback(() => {
-        // Prime audio synchronously inside the click handler when switching
-        // ON, so Chrome's autoplay gate doesn't reject the first off-gesture
-        // speak() N seconds later when the agent finally replies. We read
-        // `active` from the closure (stale by one render at worst) — that's
-        // fine because: A) priming twice is harmless, and B) keeping the
-        // side effect outside the setState updater avoids StrictMode's
-        // double-invocation calling prime twice.
-        if (!active) tts.prime();
+        if (!active) {
+            // Mark every existing assistant item as fully read and every
+            // existing tool call as already cued — otherwise the chunker
+            // would treat the entire visible history as fresh content and
+            // read it all aloud the moment voice mode turns on.
+            for (const item of items) {
+                if (item.kind === 'assistant') {
+                    const cleaned = cleanForSpeech(item.text, skipCode);
+                    readEndsRef.current.set(item.id, cleaned.length);
+                } else if (item.kind === 'tools') {
+                    cuedToolIdsRef.current.add(item.id);
+                }
+            }
+            // Prime audio synchronously inside the click handler so Chrome's
+            // autoplay gate doesn't reject the first off-gesture speak() N
+            // seconds later when the agent finally replies.
+            tts.prime();
+        }
         setActive((a) => !a);
-    }, [active, tts]);
+    }, [active, items, skipCode, tts]);
     const stopReading = useCallback(() => {
         ttsQueueRef.current = [];
         setQueueLen(0);
