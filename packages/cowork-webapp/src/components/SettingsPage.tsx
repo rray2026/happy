@@ -1,13 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight, Mic, Headphones } from 'lucide-react';
+import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight, Mic, Headphones, Play, Square } from 'lucide-react';
 import { sessionClient } from '../session';
 import { Modal } from './Modal';
 import { LogsModal } from './LogsModal';
 import { SessionTransferModal } from './SessionTransferModal';
 import { SETTINGS_DEFAULTS, updateSettings, useSettings } from '../session/settingsStore';
 import { isSpeechRecognitionSupported } from '../hooks/voice';
-import { isSpeechSynthesisSupported, useTtsVoices } from '../hooks/tts';
+import { isSpeechSynthesisSupported, useSpeechSynthesis, useTtsVoices } from '../hooks/tts';
+
+/** Short language-typical samples for the voice-preview button. Long enough
+ *  that the listener gets a feel for cadence + tone without becoming a
+ *  speech itself — picking a voice should be a few seconds of clicking. */
+const SAMPLE_ZH = '你好，这是朗读音色试听。';
+const SAMPLE_EN = 'Hello, this is a voice preview.';
+const SAMPLE_MIXED = '你好，Hello，这是 voice 试听。';
 
 const VOICE_LANG_OPTIONS: ReadonlyArray<{
     label: string;
@@ -61,6 +68,46 @@ export function SettingsPage() {
     const ttsRateEn = settings.ttsRateEn ?? ttsRate;
     const zhVoices = ttsVoices.filter((v) => v.lang.toLowerCase().startsWith('zh'));
     const enVoices = ttsVoices.filter((v) => v.lang.toLowerCase().startsWith('en'));
+
+    // Preview plumbing. The preview button click is a real user gesture, so
+    // Chrome's autoplay gate is satisfied without a separate prime() call.
+    // `activePreview` tracks which row's preview is currently playing so each
+    // button shows its own play / stop icon (a single shared `tts.speaking`
+    // would flicker the wrong button when the user jumps between rows).
+    const previewTts = useSpeechSynthesis();
+    const [activePreview, setActivePreview] = useState<'default' | 'zh' | 'en' | null>(null);
+    useEffect(() => {
+        if (!previewTts.speaking) setActivePreview(null);
+    }, [previewTts.speaking]);
+    const togglePreview = (kind: 'default' | 'zh' | 'en') => {
+        if (activePreview === kind) {
+            previewTts.cancel();
+            return;
+        }
+        previewTts.cancel();
+        setActivePreview(kind);
+        if (kind === 'zh') {
+            previewTts.speak(SAMPLE_ZH, {
+                voiceURI: settings.ttsVoiceZh || settings.ttsVoice,
+                rate: ttsRateZh,
+                lang: 'zh-CN',
+            });
+        } else if (kind === 'en') {
+            previewTts.speak(SAMPLE_EN, {
+                voiceURI: settings.ttsVoiceEn || settings.ttsVoice,
+                rate: ttsRateEn,
+                lang: 'en-US',
+            });
+        } else {
+            // Default sample is mixed-language so the user can tell whether
+            // their default voice handles both — useful before deciding to
+            // configure per-language overrides.
+            previewTts.speak(SAMPLE_MIXED, {
+                voiceURI: settings.ttsVoice,
+                rate: ttsRate,
+            });
+        }
+    };
     const silenceMs = settings.silenceMs ?? SETTINGS_DEFAULTS.silenceMs;
     const skipCode = settings.skipCode ?? SETTINGS_DEFAULTS.skipCode;
     const toolCue = settings.toolCue ?? SETTINGS_DEFAULTS.toolCue;
@@ -136,7 +183,7 @@ export function SettingsPage() {
                     <Headphones size={13} />
                     语音模式
                 </div>
-                <label className="settings-item settings-item-row">
+                <div className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
                     <span className="settings-item-text">默认音色</span>
                     <select
@@ -153,7 +200,17 @@ export function SettingsPage() {
                             </option>
                         ))}
                     </select>
-                </label>
+                    <button
+                        type="button"
+                        className="settings-preview-btn"
+                        onClick={() => togglePreview('default')}
+                        disabled={!ttsSupported}
+                        aria-label={activePreview === 'default' ? '停止试听' : '试听默认音色'}
+                        title={activePreview === 'default' ? '停止试听' : '试听'}
+                    >
+                        {activePreview === 'default' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                    </button>
+                </div>
                 <label className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
                     <span className="settings-item-text">默认语速</span>
@@ -170,7 +227,7 @@ export function SettingsPage() {
                         aria-label="默认语速"
                     />
                 </label>
-                <label className="settings-item settings-item-row">
+                <div className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
                     <span className="settings-item-text">中文音色</span>
                     <select
@@ -187,7 +244,17 @@ export function SettingsPage() {
                             </option>
                         ))}
                     </select>
-                </label>
+                    <button
+                        type="button"
+                        className="settings-preview-btn"
+                        onClick={() => togglePreview('zh')}
+                        disabled={!ttsSupported}
+                        aria-label={activePreview === 'zh' ? '停止试听' : '试听中文音色'}
+                        title={activePreview === 'zh' ? '停止试听' : '试听'}
+                    >
+                        {activePreview === 'zh' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                    </button>
+                </div>
                 <label className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
                     <span className="settings-item-text">中文语速</span>
@@ -204,7 +271,7 @@ export function SettingsPage() {
                         aria-label="中文语速"
                     />
                 </label>
-                <label className="settings-item settings-item-row">
+                <div className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
                     <span className="settings-item-text">英文音色</span>
                     <select
@@ -221,7 +288,17 @@ export function SettingsPage() {
                             </option>
                         ))}
                     </select>
-                </label>
+                    <button
+                        type="button"
+                        className="settings-preview-btn"
+                        onClick={() => togglePreview('en')}
+                        disabled={!ttsSupported}
+                        aria-label={activePreview === 'en' ? '停止试听' : '试听英文音色'}
+                        title={activePreview === 'en' ? '停止试听' : '试听'}
+                    >
+                        {activePreview === 'en' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                    </button>
+                </div>
                 <label className="settings-item settings-item-row">
                     <Headphones size={18} className="settings-item-icon" />
                     <span className="settings-item-text">英文语速</span>

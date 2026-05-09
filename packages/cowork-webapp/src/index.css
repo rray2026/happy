@@ -2521,6 +2521,30 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .settings-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Preview-voice play/stop button next to the voice <select>s. Sits flush
+ * with the select on the right; small enough to fit even on narrow phones. */
+.settings-preview-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-left: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+}
+.settings-preview-btn:hover { background: var(--surface-hover); }
+.settings-preview-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 1px;
+}
+.settings-preview-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .settings-item-note {
   padding: var(--s-2) calc(var(--s-4) + var(--safe-right)) var(--s-3) calc(var(--s-4) + var(--safe-left));
   font-size: var(--fs-xs);
