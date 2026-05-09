@@ -1,14 +1,51 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight } from 'lucide-react';
+import { Info, ScrollText, ArrowLeftRight, LogOut, ChevronRight, Mic } from 'lucide-react';
 import { sessionClient } from '../session';
 import { Modal } from './Modal';
 import { LogsModal } from './LogsModal';
 import { SessionTransferModal } from './SessionTransferModal';
+import { updateSettings, useSettings } from '../session/settingsStore';
+import { isSpeechRecognitionSupported } from '../hooks/voice';
+
+const VOICE_LANG_OPTIONS: ReadonlyArray<{
+    label: string;
+    options: ReadonlyArray<{ value: string; label: string }>;
+}> = [
+    {
+        label: '中文',
+        options: [
+            { value: 'zh-CN', label: '普通话（中国大陆）' },
+            { value: 'zh-HK', label: '粤语（香港）' },
+            { value: 'zh-TW', label: '普通话（台湾）' },
+        ],
+    },
+    {
+        label: 'English',
+        options: [
+            { value: 'en-US', label: 'English (US)' },
+            { value: 'en-GB', label: 'English (UK)' },
+        ],
+    },
+    {
+        label: '其他',
+        options: [
+            { value: 'ja-JP', label: '日本語' },
+            { value: 'ko-KR', label: '한국어' },
+            { value: 'es-ES', label: 'Español' },
+            { value: 'fr-FR', label: 'Français' },
+            { value: 'de-DE', label: 'Deutsch' },
+            { value: 'pt-BR', label: 'Português (Brasil)' },
+            { value: 'ru-RU', label: 'Русский' },
+        ],
+    },
+];
 
 export function SettingsPage() {
     const navigate = useNavigate();
     const stored = sessionClient.loadStoredCredentials();
+    const settings = useSettings();
+    const voiceSupported = isSpeechRecognitionSupported();
 
     const [logsOpen, setLogsOpen] = useState(false);
     const [transferOpen, setTransferOpen] = useState(false);
@@ -43,6 +80,38 @@ export function SettingsPage() {
                     </div>
                 </div>
             )}
+
+            <div className="settings-section">
+                <div className="settings-section-title">
+                    <Mic size={13} />
+                    语音输入
+                </div>
+                <label className="settings-item settings-item-row">
+                    <Mic size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">识别语言</span>
+                    <select
+                        className="settings-select"
+                        value={settings.voiceLang ?? ''}
+                        onChange={(e) => updateSettings({ voiceLang: e.target.value })}
+                        disabled={!voiceSupported}
+                        aria-label="语音识别语言"
+                    >
+                        <option value="">自动（系统语言）</option>
+                        {VOICE_LANG_OPTIONS.map((group) => (
+                            <optgroup key={group.label} label={group.label}>
+                                {group.options.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </optgroup>
+                        ))}
+                    </select>
+                </label>
+                {!voiceSupported && (
+                    <div className="settings-item-note">
+                        当前浏览器不支持 Web Speech API（如 Firefox），切换到 Chrome / Edge / Safari 后可启用麦克风输入。
+                    </div>
+                )}
+            </div>
 
             <div className="settings-section">
                 <div className="settings-section-title">

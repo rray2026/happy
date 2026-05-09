@@ -10,6 +10,7 @@ import { useEscape, useScrollLock } from '../hooks/overlay';
 import { useSessions, useStatus } from '../hooks/session';
 import { useSpeechRecognition } from '../hooks/voice';
 import { clearDraft, getDraft, setDraft } from '../session/draftStore';
+import { useSettings } from '../session/settingsStore';
 import { dismissToast, showToast } from '../toast/toastStore';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
@@ -275,7 +276,11 @@ export function ChatScreen() {
             .filter(Boolean);
         return parts.join(' ');
     }, []);
+    const settings = useSettings();
     const speech = useSpeechRecognition({
+        // Empty string means "auto" in the settings store; the hook's own
+        // default already falls back to navigator.language.
+        lang: settings.voiceLang || undefined,
         onTranscript: (text, final) => {
             if (final) {
                 voiceFinalRef.current = (voiceFinalRef.current + ' ' + text).trim();

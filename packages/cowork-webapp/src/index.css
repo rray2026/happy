@@ -2479,6 +2479,41 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .settings-item-danger .settings-item-icon { color: var(--error); }
 
+/* Inline form-control variant — for settings rows that hold a control
+ * (select / input) instead of a chevron / link. The label is the row label,
+ * the control sits flush right. */
+.settings-item-row {
+  cursor: default;
+}
+.settings-item-row:hover { background: var(--card); }
+
+.settings-select {
+  flex-shrink: 0;
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 6px var(--s-3);
+  cursor: pointer;
+  max-width: 60%;
+}
+.settings-select:hover { background: var(--surface-hover); }
+.settings-select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 1px;
+}
+.settings-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.settings-item-note {
+  padding: var(--s-2) calc(var(--s-4) + var(--safe-right)) var(--s-3) calc(var(--s-4) + var(--safe-left));
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 
 .toast-viewport {

@@ -39,6 +39,15 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognitionInstance) | nul
     return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * Cheap feature-detection probe — safe to call from anywhere, including
+ * outside React. Avoids paying the cost of instantiating useSpeechRecognition
+ * just to check whether a UI surface should render.
+ */
+export function isSpeechRecognitionSupported(): boolean {
+    return getSpeechRecognitionCtor() !== null;
+}
+
 interface Options {
     /** BCP-47 language tag (e.g. 'zh-CN', 'en-US'). Defaults to navigator.language. */
     lang?: string;
