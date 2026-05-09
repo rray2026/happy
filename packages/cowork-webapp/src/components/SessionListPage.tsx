@@ -6,7 +6,7 @@ import type { ChatSessionMeta } from '../types';
 import { NewSessionModal } from './NewSessionModal';
 import { Modal } from './Modal';
 import { uid } from '../session/events';
-import { loadNames, saveName } from '../session/nameStore';
+import { saveName, useNames } from '../session/nameStore';
 import { busyLabel, defaultName, formatSessionTime } from '../session/displayHelpers';
 
 function SessionAvatar({ tool }: { tool: 'claude' | 'gemini' }) {
@@ -23,7 +23,7 @@ export function SessionListPage() {
     const navigate = useNavigate();
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
     const [newSessionOpen, setNewSessionOpen] = useState(false);
-    const [names, setNames] = useState<Record<string, string>>(loadNames);
+    const names = useNames();
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editingValue, setEditingValue] = useState('');
     const [refreshing, setRefreshing] = useState(false);
@@ -68,7 +68,6 @@ export function SessionListPage() {
     const commitEdit = useCallback(() => {
         if (!editingId) return;
         saveName(editingId, editingValue);
-        setNames(loadNames());
         setEditingId(null);
     }, [editingId, editingValue]);
 

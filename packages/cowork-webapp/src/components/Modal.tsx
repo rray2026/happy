@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEscape, useScrollLock } from '../hooks/overlay';
 
 interface ModalProps {
     open: boolean;
@@ -35,14 +36,13 @@ export function Modal({
     const cardRef = useRef<HTMLDivElement>(null);
     const prevFocusRef = useRef<HTMLElement | null>(null);
 
+    useScrollLock(open);
+    useEscape(open, onClose);
+
     useEffect(() => {
         if (!open) return;
 
         prevFocusRef.current = document.activeElement as HTMLElement | null;
-
-        // Lock body scroll.
-        const prevOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
 
         // Move focus into the modal (first focusable, else the card itself).
         const raf = requestAnimationFrame(() => {
@@ -54,22 +54,12 @@ export function Modal({
             (focusable ?? card).focus();
         });
 
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                e.stopPropagation();
-                onClose();
-            }
-        };
-        window.addEventListener('keydown', onKey);
-
         return () => {
             cancelAnimationFrame(raf);
-            window.removeEventListener('keydown', onKey);
-            document.body.style.overflow = prevOverflow;
             // Restore focus to whatever opened us.
             prevFocusRef.current?.focus?.();
         };
-    }, [open, onClose]);
+    }, [open]);
 
     if (!open) return null;
 

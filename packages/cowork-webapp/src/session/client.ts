@@ -15,6 +15,8 @@ import type {
 import { eventToItems, mergeItems, uid } from './events';
 import { createBrowserStorage, type CredentialStorage } from './storage';
 
+const EMPTY_ITEMS: Item[] = [];
+
 export type WebSocketFactory = (url: string) => WebSocket;
 
 export interface SessionClientOptions {
@@ -212,7 +214,9 @@ export class SessionClient {
     // ── Per-chat-session data (items + permission) ────────────────────────────
 
     getItems(sessionId: string): Item[] {
-        return this.items.get(sessionId) ?? [];
+        // Stable empty reference: callers (e.g. useSyncExternalStore) require
+        // getSnapshot to return the same array when nothing changed.
+        return this.items.get(sessionId) ?? EMPTY_ITEMS;
     }
 
     onItemsChange(sessionId: string, handler: ItemsHandler): () => void {

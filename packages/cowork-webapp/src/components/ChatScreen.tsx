@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo, useSyncExternalStore } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ScrollText, EllipsisVertical, Plus, SendHorizontal, ChevronDown, X, Square } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta, Item, PermissionEvent, SocketStatus, ToolCall } from '../types';
 import { uid } from '../session/events';
-import { loadNames } from '../session/nameStore';
+import { useNames } from '../session/nameStore';
 import { defaultName } from '../session/displayHelpers';
+import { useEscape, useScrollLock } from '../hooks/overlay';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SessionSidebar } from './SessionSidebar';
 import { Modal } from './Modal';
@@ -125,11 +126,19 @@ export function ChatScreen() {
 
     const [status, setStatus] = useState<SocketStatus>(sessionClient.getStatus());
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
-    const [items, setItems] = useState<Item[]>(() => sessionClient.getItems(sessionId));
-    const [input, setInput] = useState('');
-    const [permission, setPermission] = useState<PermissionEvent | null>(
-        () => sessionClient.getPendingPermission(sessionId),
+    // Per-session items + pending permission read straight from the client's
+    // cache; useSyncExternalStore re-binds when sessionId changes, so this
+    // ChatScreen can keep mounted across session switches without a flash of
+    // stale content.
+    const items = useSyncExternalStore<Item[]>(
+        useCallback((cb) => sessionClient.onItemsChange(sessionId, cb), [sessionId]),
+        useCallback(() => sessionClient.getItems(sessionId), [sessionId]),
     );
+    const permission = useSyncExternalStore<PermissionEvent | null>(
+        useCallback((cb) => sessionClient.onPermissionChange(sessionId, cb), [sessionId]),
+        useCallback(() => sessionClient.getPendingPermission(sessionId), [sessionId]),
+    );
+    const [input, setInput] = useState('');
     const [logsOpen, setLogsOpen] = useState(false);
     const [logLines, setLogLines] = useState<string[]>([]);
     const [logPath, setLogPath] = useState('');
@@ -164,15 +173,32 @@ export function ChatScreen() {
     useEffect(() => {
         const unsubStatus = sessionClient.onStatusChange(setStatus);
         const unsubSessions = sessionClient.onSessionsChange(setSessions);
-        const unsubItems = sessionClient.onItemsChange(sessionId, setItems);
-        const unsubPerm = sessionClient.onPermissionChange(sessionId, setPermission);
         return () => {
             unsubStatus();
             unsubSessions();
-            unsubItems();
-            unsubPerm();
         };
-    }, [sessionId]);
+    }, []);
+
+    // Reset local UI state when the user switches sessions. The items and
+    // permission caches re-bind via useSyncExternalStore above, but per-screen
+    // ephemera (input draft, open menu/drawer, scroll position, chrome
+    // visibility) belong to the previous session.
+    // The ESLint rule discourages setState in an effect — fair as a default,
+    // but this is the documented escape hatch for "reset child state when a
+    // prop key would otherwise change," now that we've dropped key={sessionId}.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    useEffect(() => {
+        setInput('');
+        setDrawerOpen(false);
+        setMenuOpen(false);
+        setLogsOpen(false);
+        setDeleteConfirmOpen(false);
+        lastScrollTopRef.current = 0;
+        setChromeHidden(false);
+        setShowScrollBtn(false);
+        atBottomRef.current = true;
+    }, [sessionId, setChromeHidden, setShowScrollBtn]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     // Auto-scroll to bottom only when not scrolled up. The atBottomRef gets
     // updated in handleScroll without triggering a render.
@@ -182,19 +208,8 @@ export function ChatScreen() {
         }
     }, [items]);
 
-    useEffect(() => {
-        if (!drawerOpen) return;
-        const prev = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-        return () => { document.body.style.overflow = prev; };
-    }, [drawerOpen]);
-
-    useEffect(() => {
-        if (!drawerOpen) return;
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false); };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [drawerOpen]);
+    useScrollLock(drawerOpen);
+    useEscape(drawerOpen, () => setDrawerOpen(false));
 
     const handleScroll = useCallback(() => {
         const el = messagesRef.current;
@@ -217,13 +232,8 @@ export function ChatScreen() {
     const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
     const isBusy = activeSession?.busy ?? false;
     const pendingCount = activeSession?.pending ?? 0;
-    // Read once per ChatScreen mount instead of every render. Renaming
-    // refreshes via the SessionListPage / SessionSidebar inputs and takes
-    // effect on the next mount of this screen — acceptable trade-off.
-    const headerName = useMemo(() => {
-        if (!activeSession) return 'Cowork';
-        return loadNames()[sessionId] ?? defaultName(activeSession);
-    }, [activeSession, sessionId]);
+    const names = useNames();
+    const headerName = activeSession ? (names[sessionId] ?? defaultName(activeSession)) : 'Cowork';
 
     const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setInput(e.target.value);

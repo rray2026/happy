@@ -4,7 +4,7 @@ import { Pencil, Plus, X } from 'lucide-react';
 import { sessionClient } from '../session';
 import type { ChatSessionMeta } from '../types';
 import { uid } from '../session/events';
-import { loadNames, saveName } from '../session/nameStore';
+import { saveName, useNames } from '../session/nameStore';
 import { busyLabel, defaultName } from '../session/displayHelpers';
 import { Modal } from './Modal';
 import { NewSessionModal } from './NewSessionModal';
@@ -22,7 +22,7 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
     const [sessions, setSessions] = useState<ChatSessionMeta[]>(sessionClient.getSessions());
     const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
     const [newSessionOpen, setNewSessionOpen] = useState(false);
-    const [names, setNames] = useState<Record<string, string>>(loadNames);
+    const names = useNames();
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editingValue, setEditingValue] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
@@ -68,7 +68,6 @@ export function SessionSidebar({ activeSessionId, drawerOpen = false, onCloseDra
     const commitEdit = useCallback(() => {
         if (!editingId) return;
         saveName(editingId, editingValue);
-        setNames(loadNames());
         setEditingId(null);
     }, [editingId, editingValue]);
 
