@@ -391,6 +391,23 @@ export function SettingsPage() {
                         maxLength={32}
                     />
                 </label>
+                <label className="settings-item settings-item-stack">
+                    <span className="settings-item-text">语音输入提示模板</span>
+                    <textarea
+                        className="settings-textarea"
+                        placeholder="可选。例：&#10;请用 2-3 句话简短回复，不要代码块或长 markdown。&#10;&#10;{message}"
+                        rows={4}
+                        value={settings.voicePromptTemplate ?? ''}
+                        onChange={(e) => updateSettings({ voicePromptTemplate: e.target.value })}
+                        disabled={!voiceSupported}
+                        aria-label="语音输入提示模板"
+                        spellCheck={false}
+                        maxLength={1000}
+                    />
+                    <span className="settings-item-help">
+                        语音模式发送时会把这段包在你说的话外面发给 agent。<code>{'{message}'}</code> 表示你的话插入位置；不写则当前缀，与你的话之间空一行。
+                    </span>
+                </label>
                 <label className="settings-item settings-item-row">
                     <ScrollText size={18} className="settings-item-icon" />
                     <span className="settings-item-text">跳过代码块朗读</span>

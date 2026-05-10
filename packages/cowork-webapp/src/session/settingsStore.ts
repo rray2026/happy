@@ -47,6 +47,13 @@ export interface Settings {
      *  message without it ever leaving the device. Empty = disabled.
      *  Same normalization rules as sendTrigger. */
     cancelTrigger?: string;
+    /** Wrapper text added to every voice-mode send before it reaches the
+     *  agent. Use `{message}` to mark where the user's spoken text should
+     *  be inserted; if the placeholder is absent, the template is prepended
+     *  with a blank line. Empty = no wrapping. Useful for nudging the
+     *  agent towards short, voice-friendly replies in driving scenarios
+     *  ("请用 2-3 句话回复，不要代码块"). */
+    voicePromptTemplate?: string;
     /** Skip fenced + inline code blocks during TTS. Default true. */
     skipCode?: boolean;
     /** Play a short audio cue when the agent invokes a tool (instead of reading it). Default true. */

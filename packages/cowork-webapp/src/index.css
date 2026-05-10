@@ -2730,6 +2730,49 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .settings-text-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Vertical layout variant of settings-item — for fields where the control is
+ * too tall (multi-line textarea) to share a row with the label. */
+.settings-item-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  align-items: stretch;
+  padding: var(--s-3) calc(var(--s-4) + var(--safe-right)) var(--s-3) calc(var(--s-4) + var(--safe-left));
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.settings-textarea {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--s-2) var(--s-3);
+  resize: vertical;
+  min-height: 80px;
+  outline: none;
+}
+.settings-textarea:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 1px;
+}
+.settings-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-item-help {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+.settings-item-help code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--surface-hover);
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+
 .settings-item-value-meta {
   font-family: var(--mono);
   font-size: var(--fs-xs);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    applyVoicePromptTemplate,
     findTriggerRangesInOriginal,
     normalizeForTrigger,
     pinyinPhoneticDistance,
@@ -203,6 +204,30 @@ describe('findTriggerRangesInOriginal', () => {
         // "ing" pinyin tail of 听 (ting) should NOT be reported — same
         // protection as triggerOccursIn.
         expect(findTriggerRangesInOriginal('听', 'ing')).toEqual([]);
+    });
+});
+
+describe('applyVoicePromptTemplate', () => {
+    it('returns the raw message when template is empty / undefined / whitespace', () => {
+        expect(applyVoicePromptTemplate(undefined, 'hello')).toBe('hello');
+        expect(applyVoicePromptTemplate('', 'hello')).toBe('hello');
+        expect(applyVoicePromptTemplate('   ', 'hello')).toBe('hello');
+    });
+
+    it('substitutes {message} when present', () => {
+        expect(applyVoicePromptTemplate('我说: {message} 请回复。', '你好')).toBe('我说: 你好 请回复。');
+    });
+
+    it('treats template as a prefix when no {message} placeholder', () => {
+        expect(applyVoicePromptTemplate('请简短回复', '你好')).toBe('请简短回复\n\n你好');
+    });
+
+    it('trims surrounding whitespace from the template before joining', () => {
+        expect(applyVoicePromptTemplate('  请简短回复  ', '你好')).toBe('请简短回复\n\n你好');
+    });
+
+    it('only replaces the first occurrence of {message}', () => {
+        expect(applyVoicePromptTemplate('{message} -- {message}', 'X')).toBe('X -- {message}');
     });
 });
 

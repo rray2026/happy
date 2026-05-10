@@ -302,6 +302,7 @@ export function ChatScreen() {
         stopReadingTrigger: settings.stopReadingTrigger || undefined,
         abortTrigger: settings.abortTrigger || undefined,
         cancelTrigger: settings.cancelTrigger || undefined,
+        voicePromptTemplate: settings.voicePromptTemplate || undefined,
         skipCode: settings.skipCode ?? SETTINGS_DEFAULTS.skipCode,
         toolCue: settings.toolCue ?? SETTINGS_DEFAULTS.toolCue,
         onError: (msg) => showToast(`语音模式：${msg}`, { kind: 'error' }),

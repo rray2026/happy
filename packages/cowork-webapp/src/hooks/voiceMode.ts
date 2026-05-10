@@ -47,6 +47,11 @@ export interface VoiceModeOptions {
      *  the buffer and the silence countdown so the user can start the
      *  utterance over. Empty = disabled. */
     cancelTrigger?: string;
+    /** Wrapper text applied to every voice-mode send before reaching the
+     *  agent. `{message}` marks where the user's spoken text goes; absence
+     *  of the placeholder means "prepend, two newlines between". Empty =
+     *  send raw. */
+    voicePromptTemplate?: string;
     /** Strip code blocks from TTS output. */
     skipCode?: boolean;
     /** Play a "ping" cue when a tool call appears in the stream. */
@@ -387,6 +392,23 @@ export function stripTrailingTrigger(transcript: string, trigger: string): strin
     return null;
 }
 
+/**
+ * Wrap a user-spoken message with the voice-mode prompt template before it
+ * goes to the agent. `{message}` marks the substitution point; without one,
+ * the template is treated as a prefix and joined with two newlines so it
+ * reads as a separate paragraph. Trims an empty template back to the raw
+ * message — no template means no augmentation.
+ */
+export function applyVoicePromptTemplate(
+    template: string | undefined,
+    message: string,
+): string {
+    const t = template?.trim();
+    if (!t) return message;
+    if (t.includes('{message}')) return t.replace('{message}', message);
+    return `${t}\n\n${message}`;
+}
+
 /** Coarse language tag for TTS voice/rate switching. We split readback into
  *  contiguous segments of one language so each can use its own voice/rate —
  *  English in a Chinese voice (or vice versa) sounds robotic, and the same
@@ -488,6 +510,7 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         stopReadingTrigger,
         abortTrigger,
         cancelTrigger,
+        voicePromptTemplate,
         skipCode = true,
         toolCue = true,
         onError,
@@ -716,8 +739,9 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                     transcriptRef.current = '';
                     setLiveTranscript('');
                     if (stripped && active && !suspended) {
-                        sessionClient.sendInput(sessionId, stripped);
-                        sessionClient.appendOptimisticUser(sessionId, stripped);
+                        const wrapped = applyVoicePromptTemplate(voicePromptTemplate, stripped);
+                        sessionClient.sendInput(sessionId, wrapped);
+                        sessionClient.appendOptimisticUser(sessionId, wrapped);
                         setPendingSend(true);
                     }
                     return;
@@ -733,8 +757,9 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 transcriptRef.current = '';
                 setLiveTranscript('');
                 if (pending && active && !suspended) {
-                    sessionClient.sendInput(sessionId, pending);
-                    sessionClient.appendOptimisticUser(sessionId, pending);
+                    const wrapped = applyVoicePromptTemplate(voicePromptTemplate, pending);
+                    sessionClient.sendInput(sessionId, wrapped);
+                    sessionClient.appendOptimisticUser(sessionId, wrapped);
                     setPendingSend(true);
                 }
             }, silenceMs);
