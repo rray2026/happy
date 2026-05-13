@@ -26,6 +26,21 @@ function getContext(): AudioContext | null {
     }
 }
 
+/**
+ * Tear down the cached AudioContext, if any. iOS Safari treats an open
+ * AudioContext as ongoing audio activity for the page and won't fully
+ * release the system "audio/microphone in use" indicator until every
+ * audio resource on the page is closed — calling this on voice-mode
+ * exit closes one of those resources. Safe to call when no context
+ * exists; idempotent. Next playToolCue() will lazily create a fresh one.
+ */
+export function closeToolCue(): void {
+    const ctx = ctxRef;
+    if (!ctx) return;
+    ctxRef = null;
+    try { ctx.close().catch(() => undefined); } catch { /* best-effort */ }
+}
+
 export function playToolCue(): void {
     const ctx = getContext();
     if (!ctx) return;

@@ -4,7 +4,7 @@ import { sessionClient, uid } from '../session';
 import type { Item } from '../types';
 import { useSpeechRecognition } from './voice';
 import { useSpeechSynthesis } from './tts';
-import { playToolCue } from '../audio/cue';
+import { closeToolCue, playToolCue } from '../audio/cue';
 import { polishText, QwenPolishError } from '../voice/qwen';
 
 export type VoicePhase = 'idle' | 'listening' | 'pending' | 'thinking' | 'speaking';
@@ -951,6 +951,10 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             // abort(). The transient pause for `pendingSend` below still
             // uses the soft stop because we'll restart immediately.
             if (stt.listening) stt.abort();
+            // Also drop the tool-cue AudioContext: on iOS, leaving any
+            // AudioContext open keeps Safari listed as using audio in the
+            // Control Center "audio area", even after the mic is released.
+            closeToolCue();
             return;
         }
         const shouldListen = !pendingSend;
