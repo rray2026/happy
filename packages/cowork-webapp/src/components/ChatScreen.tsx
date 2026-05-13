@@ -27,6 +27,13 @@ import { summarizeToolCall } from './ToolCallView';
 const isTouchDevice = typeof window !== 'undefined' &&
     ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
+/** In-memory remembered scroll position per session. Survives navigation
+ *  inside the tab (sessions list → chat → list → chat). Deliberately not
+ *  persisted to storage — re-entering a session after a tab refresh starts
+ *  at the bottom, which lines up with "you've stepped away long enough that
+ *  position memory isn't useful". */
+const scrollPositions = new Map<string, number>();
+
 function formatMsgTime(ts?: number): string {
     if (!ts) return '';
     const d = new Date(ts);
@@ -222,18 +229,44 @@ export function ChatScreen() {
         return () => clearTimeout(handle);
     }, [sessionId, input]);
 
-    // Initial scroll-to-bottom: synchronous, no animation, before the
-    // browser paints. Without this, entering a long-history session showed
-    // the top of the conversation flashing past before scrollIntoView's
-    // smooth animation caught up — perceived as a UI glitch ("页面从上
-    // 到下快速滑动"). useLayoutEffect runs after DOM mutation but before
-    // paint, so the user lands at the bottom in a single frame.
+    // Initial positioning on mount: restore the user's last scroll position
+    // for this session if we have one cached, otherwise drop them at the
+    // bottom. Synchronous (no animation), runs after DOM mutation but
+    // before paint, so the bottom-of-the-list ends up in view in a single
+    // frame — no top-to-bottom slide. Sets atBottomRef and the FAB
+    // visibility accordingly so streaming auto-follow only fires when the
+    // restored position is actually near the bottom.
     useLayoutEffect(() => {
         if (initialScrollDoneRef.current) return;
         if (items.length === 0) return;
-        bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+        const el = messagesRef.current;
+        if (!el) return;
+        const saved = scrollPositions.get(sessionId);
+        if (typeof saved === 'number' && saved > 0) {
+            const max = Math.max(0, el.scrollHeight - el.clientHeight);
+            const target = Math.max(0, Math.min(saved, max));
+            el.scrollTop = target;
+            lastScrollTopRef.current = target;
+            const atBottom = max - target < 120;
+            setShowScrollBtn(!atBottom);
+        } else {
+            bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+            setShowScrollBtn(false);
+        }
         initialScrollDoneRef.current = true;
-    }, [items.length]);
+    }, [items.length, sessionId, setShowScrollBtn]);
+
+    // Persist the current scroll position when leaving this session (either
+    // unmount or sessionId change) so re-entry can restore it. handleScroll
+    // also updates the cache live, so even an abrupt close (no cleanup
+    // chance, e.g. tab closed) keeps the most recent value.
+    useEffect(() => {
+        const sid = sessionId;
+        return () => {
+            const el = messagesRef.current;
+            if (el) scrollPositions.set(sid, el.scrollTop);
+        };
+    }, [sessionId]);
 
     // Streaming follow: once the initial position is set, smooth-scroll
     // along with new items as long as we're parked at the bottom. The
@@ -266,6 +299,9 @@ export function ChatScreen() {
         const atBottom = el.scrollHeight - scrollTop - el.clientHeight < 120;
         const delta = scrollTop - lastScrollTopRef.current;
         lastScrollTopRef.current = scrollTop;
+        // Remember this position for the session; survives navigation
+        // within the tab so re-entry lands where the user left off.
+        scrollPositions.set(sessionId, scrollTop);
 
         setShowScrollBtn(!atBottom);
 
@@ -275,7 +311,7 @@ export function ChatScreen() {
             if (atBottom || delta > 5) setChromeHidden(false);
             else if (delta < -5) setChromeHidden(true);
         }
-    }, [setShowScrollBtn, setChromeHidden]);
+    }, [sessionId, setShowScrollBtn, setChromeHidden]);
 
     const activeSession = useMemo(() => sessions.find((s) => s.id === sessionId), [sessions, sessionId]);
     const isBusy = activeSession?.busy ?? false;
