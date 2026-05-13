@@ -65,17 +65,52 @@ cowork-agent --gemini -m gemini-2.5-pro
 
 首次配对成功后，30 天内同一浏览器打开即自动恢复，**不用再扫码**。
 
-## 配置：环境变量
+## 配置
 
-下列环境变量在启动 `cowork-agent` 前 `export` 即可生效：
+三种来源，优先级从高到低：**CLI flag → 环境变量 → 配置文件 → 内置默认**。
+
+### CLI flags
+
+```bash
+cowork-agent serve \
+    --claude                       # 或 --gemini
+    --model claude-sonnet-4-5      # -m 简写
+    --workdir ~/Code/myproject     # -w 简写，会话沙箱根目录
+    --config ~/cowork.json         # -c 简写，加载非默认路径的配置文件
+```
+
+`cowork-agent --help` 看完整列表。
+
+### 环境变量
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `COWORK_AGENT_PORT` | `4000` | WebSocket 监听端口 |
 | `COWORK_AGENT_BIND` | `127.0.0.1` | 绑定网卡。跨设备使用改成 `0.0.0.0` |
 | `COWORK_AGENT_ENDPOINT` | `ws://localhost:4000` | 写进 QR 的地址。**webapp 会连的就是这个** |
+| `COWORK_AGENT_WORKDIR` | 进程 cwd | 会话沙箱根目录（被 `--workdir` 覆盖） |
 | `COWORK_AGENT_HOME` | `~/.cowork-agent` | 密钥与日志目录（私钥文件 `0600` 权限） |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | 传给 `gemini` CLI |
+
+### 配置文件
+
+`cowork-agent` 启动时会读 `~/.cowork-agent/config.json`（存在就读，不存在就忽略）；也可以用 `--config <path>` 显式指定（指定后文件必须存在）。
+
+所有字段都是可选的：
+
+```jsonc
+{
+    "workdir": "~/Code/myproject",     // 会话沙箱根目录；支持 ~ 展开，必须是已存在的目录
+    "port": 4000,
+    "bind": "127.0.0.1",
+    "endpoint": "ws://localhost:4000",
+    "agent": "claude",                 // 或 "gemini"
+    "model": "claude-sonnet-4-5",
+    "agentArgs": []                    // 透传给 claude/gemini CLI 的额外参数
+}
+```
+
+> CLI 上传的 `-- agent-args…` 会**整体替换**配置里的 `agentArgs`（而非合并），避免 `--resume` 这种 flag 被重复传。
 
 ### 在手机 / 平板上用
 

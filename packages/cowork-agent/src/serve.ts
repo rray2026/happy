@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import { buildQRPayload, loadOrGenerateCliKeys } from './auth.js';
 import { keysPath, sessionsDir } from './config.js';
+import { loadConfigFile, resolveWorkdir } from './configFile.js';
 import { listDirs, resolveRelPath } from './fsBrowser.js';
 import { logger } from './logger.js';
 import { displayQRCode } from './qrcode.js';
@@ -18,36 +19,77 @@ export interface ServeOptions {
     port: number;
     host: string;
     endpoint: string;
+    workdir: string;
     agentArgs: string[];
     geminiApiKey: string | undefined;
     model: string | undefined;
+    /** Set when `--config <path>` was passed; used only for the startup banner. */
+    configPath: string | undefined;
 }
 
+/**
+ * Resolve CLI flags + env vars + optional JSON config file into a fully
+ * populated `ServeOptions`. Precedence (highest first):
+ *   CLI flag > env var > config file > built-in default
+ */
 export function parseServeArgs(args: string[]): ServeOptions {
-    let agent: AgentType = 'claude';
-    let model: string | undefined;
+    let agentFlag: AgentType | undefined;
+    let modelFlag: string | undefined;
+    let workdirFlag: string | undefined;
+    let configFlag: string | undefined;
     const agentArgs: string[] = [];
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === '--claude') {
-            agent = 'claude';
+            agentFlag = 'claude';
         } else if (arg === '--gemini') {
-            agent = 'gemini';
+            agentFlag = 'gemini';
         } else if ((arg === '--model' || arg === '-m') && i + 1 < args.length) {
-            model = args[++i];
+            modelFlag = args[++i];
+        } else if ((arg === '--workdir' || arg === '-w') && i + 1 < args.length) {
+            workdirFlag = args[++i];
+        } else if ((arg === '--config' || arg === '-c') && i + 1 < args.length) {
+            configFlag = args[++i];
         } else {
             agentArgs.push(arg);
         }
     }
 
-    const port = parseInt(process.env.COWORK_AGENT_PORT ?? '4000', 10);
-    const host = process.env.COWORK_AGENT_BIND ?? '127.0.0.1';
+    const config = loadConfigFile(configFlag);
+
+    const port = parseInt(
+        process.env.COWORK_AGENT_PORT ?? String(config?.port ?? 4000),
+        10,
+    );
+    const host = process.env.COWORK_AGENT_BIND ?? config?.bind ?? '127.0.0.1';
     const defaultEndpointHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
-    const endpoint = process.env.COWORK_AGENT_ENDPOINT ?? `ws://${defaultEndpointHost}:${port}`;
+    const endpoint =
+        process.env.COWORK_AGENT_ENDPOINT ??
+        config?.endpoint ??
+        `ws://${defaultEndpointHost}:${port}`;
     const geminiApiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
 
-    return { agent, port, host, endpoint, agentArgs, geminiApiKey, model };
+    const workdir = resolveWorkdir(
+        workdirFlag ?? process.env.COWORK_AGENT_WORKDIR ?? config?.workdir,
+    );
+    const agent: AgentType = agentFlag ?? config?.agent ?? 'claude';
+    const model = modelFlag ?? config?.model;
+    // CLI-supplied agentArgs fully replace config-supplied ones — merging them
+    // tends to surprise (e.g. a duplicated --resume flag).
+    const finalAgentArgs = agentArgs.length > 0 ? agentArgs : (config?.agentArgs ?? []);
+
+    return {
+        agent,
+        port,
+        host,
+        endpoint,
+        workdir,
+        agentArgs: finalAgentArgs,
+        geminiApiKey,
+        model,
+        configPath: configFlag,
+    };
 }
 
 export async function handleServe(opts: ServeOptions): Promise<void> {
@@ -62,7 +104,7 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
     // reference to the other side, which is always fully initialized by the
     // time any of them fires (first message must cross the ws).
     let server!: WsServerHandle;
-    const agentRoot = process.cwd();
+    const agentRoot = opts.workdir;
 
     const useClaudeChannel = process.env.COWORK_AGENT_USE_CHANNEL === '1';
     const manager = new SessionManager({
@@ -80,7 +122,7 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
 
     // Read persisted session files *before* starting the server (pure I/O, no
     // side effects on the manager yet), so we can decide whether to auto-create.
-    const restored = loadAllSessions(sessionsDir, process.cwd());
+    const restored = loadAllSessions(sessionsDir, agentRoot);
 
     server = startWsServer({
         port: opts.port,
@@ -128,6 +170,8 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
     const isRemoteBind = opts.host === '0.0.0.0' || opts.host === '::';
     console.log(chalk.bold('\n🚀 cowork-agent — direct connect'));
     console.log(chalk.dim(`Agent: ${opts.agent}${modelLabel}  |  Bind: ${opts.host}:${opts.port}`));
+    console.log(chalk.dim(`Workdir: ${opts.workdir}`));
+    if (opts.configPath) console.log(chalk.dim(`Config: ${opts.configPath}`));
     console.log(chalk.dim(`Endpoint: ${opts.endpoint}\n`));
     if (isRemoteBind) {
         console.log(
