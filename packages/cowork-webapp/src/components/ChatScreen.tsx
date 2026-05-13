@@ -182,6 +182,11 @@ export function ChatScreen() {
      *  same window stops auto-following — the bug the user saw as "偶尔
      *  没到底部" when re-entering a streaming chat. */
     const autoScrollingRef = useRef(false);
+    /** Whether the first instant-scroll on this session mount has happened.
+     *  Resets in the sessionId effect. Used to keep the initial paint at
+     *  the bottom (no top-to-bottom smooth animation that users perceive
+     *  as a UI glitch when entering long histories). */
+    const initialScrollDoneRef = useRef(false);
 
     // Reset local UI state when the user switches sessions. The items and
     // permission caches re-bind via useSyncExternalStore above, but per-screen
@@ -203,6 +208,7 @@ export function ChatScreen() {
         setChromeHidden(false);
         setShowScrollBtn(false);
         atBottomRef.current = true;
+        initialScrollDoneRef.current = false;
         // If a permission toast for this session was raised before the user
         // got here, the modal we render below now owns the prompt — drop it.
         dismissToast(`perm-${sessionId}`);
@@ -216,15 +222,25 @@ export function ChatScreen() {
         return () => clearTimeout(handle);
     }, [sessionId, input]);
 
-    // Auto-scroll to bottom only when not scrolled up. The atBottomRef gets
-    // updated in handleScroll without triggering a render.
-    //
-    // autoScrollingRef gates handleScroll for ~450ms so the smooth scroll
-    // doesn't get cut short by its own intermediate scroll events flipping
-    // atBottomRef to false. Each new items batch re-triggers scrollIntoView
-    // which the browser re-targets — natural follow-along behavior while
-    // the agent streams.
+    // Initial scroll-to-bottom: synchronous, no animation, before the
+    // browser paints. Without this, entering a long-history session showed
+    // the top of the conversation flashing past before scrollIntoView's
+    // smooth animation caught up — perceived as a UI glitch ("页面从上
+    // 到下快速滑动"). useLayoutEffect runs after DOM mutation but before
+    // paint, so the user lands at the bottom in a single frame.
+    useLayoutEffect(() => {
+        if (initialScrollDoneRef.current) return;
+        if (items.length === 0) return;
+        bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+        initialScrollDoneRef.current = true;
+    }, [items.length]);
+
+    // Streaming follow: once the initial position is set, smooth-scroll
+    // along with new items as long as we're parked at the bottom. The
+    // autoScrollingRef gate stops the animation's own scroll events from
+    // flipping atBottomRef to false mid-flight (race fixed earlier).
     useEffect(() => {
+        if (!initialScrollDoneRef.current) return;
         if (!atBottomRef.current) return;
         autoScrollingRef.current = true;
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
