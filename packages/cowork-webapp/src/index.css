@@ -2638,6 +2638,60 @@ button:focus:not(:focus-visible) { outline: none; }
   animation: voice-live-fade-in 120ms ease-out, voice-live-pulse 1.4s ease-in-out infinite 200ms;
   outline: 2px solid rgba(255, 255, 255, 0.25);
 }
+/* Preview-before-send variant of the bubble: shows raw + polished + a
+ * hint line about how to confirm or cancel. Stacks vertically so a phone
+ * can fit a reasonable amount of text per line. */
+.voice-live-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  /* Match outline styling so user clearly sees "this needs a decision". */
+  outline: 2px solid rgba(255, 255, 255, 0.32);
+}
+.voice-live-preview-status {
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  font-weight: 400;
+}
+.voice-live-preview-polishing .voice-live-preview-status::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: #ffd66e;
+  animation: voice-bar-pulse 1s ease-in-out infinite;
+}
+.voice-live-preview-raw {
+  font-size: 0.72em;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.4;
+  font-weight: 400;
+}
+.voice-live-preview-polished {
+  font-size: 1em;
+  color: #fff;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.voice-live-preview-error {
+  font-size: 0.72em;
+  color: #ff9b8a;
+  font-weight: 400;
+}
+.voice-live-preview-hint {
+  font-size: 0.72em;
+  color: rgba(255, 214, 110, 0.85);
+  letter-spacing: 0.02em;
+  font-weight: 400;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
 /* Wake-word highlight inside the live preview. Warm color contrasts against
  * the neutral white text so the user spots the trigger at a glance. */
 .voice-live-trigger {

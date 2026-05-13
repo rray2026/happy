@@ -54,6 +54,28 @@ export interface Settings {
      *  agent towards short, voice-friendly replies in driving scenarios
      *  ("请用 2-3 句话回复，不要代码块"). */
     voicePromptTemplate?: string;
+    /** "Preview before send" gate for voice input:
+     *   - 'off'    : current behavior; silence elapsed → send immediately
+     *   - 'raw'    : silence elapsed → show captured raw text, require
+     *                sendTrigger to confirm. Local-only, no API.
+     *   - 'polish' : silence elapsed → call Qwen to clean up the transcript,
+     *                show original + polished side-by-side; sendTrigger
+     *                confirms (sends polished, or raw if polish failed).
+     *  Defaults to 'off' so existing users see no behavior change. */
+    voicePreviewMode?: 'off' | 'raw' | 'polish';
+    /** DashScope (Alibaba Qwen) API key, used only when voicePreviewMode is
+     *  'polish'. Stored client-side in localStorage like the rest of
+     *  settings — kept off the agent path entirely. */
+    qwenApiKey?: string;
+    /** Qwen model identifier passed to DashScope's OpenAI-compatible
+     *  endpoint. Defaults to `qwen-plus` (measured best speed/quality
+     *  trade-off for the polish task — ~2-3s, follows the system prompt
+     *  cleanly). User can override if Alibaba renames or they want a
+     *  different tier. */
+    qwenModel?: string;
+    /** Optional hint added to the polish system prompt, e.g. domain-specific
+     *  vocabulary to preserve. Empty = no hint. */
+    qwenPolishHint?: string;
     /** Skip fenced + inline code blocks during TTS. Default true. */
     skipCode?: boolean;
     /** Play a short audio cue when the agent invokes a tool (instead of reading it). Default true. */

@@ -14,6 +14,13 @@ interface Props {
      *  word. Highlighted in a distinct color so the user gets visual
      *  confirmation before / as the trigger fires. */
     triggerRanges?: Array<[number, number]>;
+    /** Preview-before-send state. When not 'off', the bubble switches from
+     *  live STT preview to the captured / polished text awaiting user
+     *  confirmation. */
+    previewKind?: 'off' | 'polishing' | 'preview';
+    previewRaw?: string;
+    previewPolished?: string;
+    previewError?: string;
 }
 
 /** Sort + merge overlapping/adjacent ranges so we can split the transcript
@@ -62,13 +69,54 @@ function renderSegments(text: string, ranges: Array<[number, number]>): ReactNod
  * looking at any specific corner of the screen. Hides whenever the live
  * transcript is empty so it doesn't loiter as visual noise between turns.
  *
- * Trigger words inside the preview render in a distinct color so the user
- * sees, in real time, that their wake-word was understood — useful both as
- * confirmation right before the action fires and as a debugging aid if the
- * trigger doesn't seem to be working.
+ * Two display modes:
+ * - Normal live STT: transcript shown with trigger highlight; pulses when
+ *   the silence timer is armed.
+ * - Preview-before-send: shows raw + polished side-by-side with a hint
+ *   line so the user knows to confirm or retract.
  */
-export function VoiceLiveTranscript({ transcript, visible, pending, triggerRanges }: Props) {
-    if (!visible || !transcript.trim()) return null;
+export function VoiceLiveTranscript({
+    transcript,
+    visible,
+    pending,
+    triggerRanges,
+    previewKind = 'off',
+    previewRaw = '',
+    previewPolished = '',
+    previewError,
+}: Props) {
+    if (!visible && previewKind === 'off') return null;
+    if (previewKind === 'off' && !transcript.trim()) return null;
+
+    if (previewKind !== 'off') {
+        const polished = previewPolished.trim();
+        const raw = previewRaw.trim();
+        const showPolished = !!polished && polished !== raw;
+        return (
+            <div
+                className={`voice-live-transcript voice-live-preview${previewKind === 'polishing' ? ' voice-live-preview-polishing' : ''}`}
+                role="status"
+                aria-live="polite"
+            >
+                {previewKind === 'polishing' ? (
+                    <div className="voice-live-preview-status">AI 润色中…</div>
+                ) : null}
+                {showPolished ? (
+                    <>
+                        <div className="voice-live-preview-raw">原文：{raw}</div>
+                        <div className="voice-live-preview-polished">{polished}</div>
+                    </>
+                ) : (
+                    <div className="voice-live-preview-polished">{raw}</div>
+                )}
+                {previewError ? <div className="voice-live-preview-error">{previewError}</div> : null}
+                {previewKind === 'preview' ? (
+                    <div className="voice-live-preview-hint">说「发送」确认 · 说「重来」取消</div>
+                ) : null}
+            </div>
+        );
+    }
+
     const content = triggerRanges && triggerRanges.length > 0
         ? renderSegments(transcript, triggerRanges)
         : transcript;

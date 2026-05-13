@@ -303,6 +303,10 @@ export function ChatScreen() {
         abortTrigger: settings.abortTrigger || undefined,
         cancelTrigger: settings.cancelTrigger || undefined,
         voicePromptTemplate: settings.voicePromptTemplate || undefined,
+        voicePreviewMode: settings.voicePreviewMode ?? 'off',
+        qwenApiKey: settings.qwenApiKey || undefined,
+        qwenModel: settings.qwenModel || 'qwen-plus',
+        qwenPolishHint: settings.qwenPolishHint || undefined,
         skipCode: settings.skipCode ?? SETTINGS_DEFAULTS.skipCode,
         toolCue: settings.toolCue ?? SETTINGS_DEFAULTS.toolCue,
         onError: (msg) => showToast(`语音模式：${msg}`, { kind: 'error' }),
@@ -583,6 +587,10 @@ export function ChatScreen() {
                     }
                     pending={voiceMode.phase === 'pending'}
                     triggerRanges={voiceMode.liveTriggerRanges}
+                    previewKind={voiceMode.previewKind}
+                    previewRaw={voiceMode.previewRaw}
+                    previewPolished={voiceMode.previewPolished}
+                    previewError={voiceMode.previewError}
                 />
 
 

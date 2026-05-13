@@ -409,6 +409,69 @@ export function SettingsPage() {
                     </span>
                 </label>
                 <label className="settings-item settings-item-row">
+                    <Mic size={18} className="settings-item-icon" />
+                    <span className="settings-item-text">发送前预览</span>
+                    <select
+                        className="settings-select"
+                        value={settings.voicePreviewMode ?? 'off'}
+                        onChange={(e) => updateSettings({ voicePreviewMode: e.target.value as 'off' | 'raw' | 'polish' })}
+                        disabled={!voiceSupported}
+                        aria-label="发送前预览模式"
+                    >
+                        <option value="off">关闭（直接发送）</option>
+                        <option value="raw">仅预览（不润色，需确认）</option>
+                        <option value="polish">AI 润色后预览（Qwen + 需确认）</option>
+                    </select>
+                </label>
+                {(settings.voicePreviewMode === 'polish') && (
+                    <>
+                        <label className="settings-item settings-item-row">
+                            <Mic size={18} className="settings-item-icon" />
+                            <span className="settings-item-text">Qwen API Key</span>
+                            <input
+                                type="password"
+                                className="settings-text-input"
+                                placeholder="sk-..."
+                                value={settings.qwenApiKey ?? ''}
+                                onChange={(e) => updateSettings({ qwenApiKey: e.target.value })}
+                                aria-label="Qwen API Key"
+                                spellCheck={false}
+                                autoComplete="off"
+                            />
+                        </label>
+                        <label className="settings-item settings-item-row">
+                            <Mic size={18} className="settings-item-icon" />
+                            <span className="settings-item-text">Qwen 模型</span>
+                            <input
+                                type="text"
+                                className="settings-text-input"
+                                placeholder="qwen-plus"
+                                value={settings.qwenModel ?? ''}
+                                onChange={(e) => updateSettings({ qwenModel: e.target.value })}
+                                aria-label="Qwen 模型"
+                                spellCheck={false}
+                                maxLength={64}
+                            />
+                        </label>
+                        <label className="settings-item settings-item-stack">
+                            <span className="settings-item-text">润色额外提示（可选）</span>
+                            <textarea
+                                className="settings-textarea"
+                                placeholder="例：我说的是 Rust + WASM 项目，专业术语保留英文原样"
+                                rows={3}
+                                value={settings.qwenPolishHint ?? ''}
+                                onChange={(e) => updateSettings({ qwenPolishHint: e.target.value })}
+                                aria-label="润色额外提示"
+                                spellCheck={false}
+                                maxLength={500}
+                            />
+                            <span className="settings-item-help">
+                                附加到润色 system prompt 的最后；只在「AI 润色」模式生效。
+                            </span>
+                        </label>
+                    </>
+                )}
+                <label className="settings-item settings-item-row">
                     <ScrollText size={18} className="settings-item-icon" />
                     <span className="settings-item-text">跳过代码块朗读</span>
                     <input

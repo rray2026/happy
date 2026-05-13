@@ -5,6 +5,7 @@ import type { Item } from '../types';
 import { useSpeechRecognition } from './voice';
 import { useSpeechSynthesis } from './tts';
 import { playToolCue } from '../audio/cue';
+import { polishText, QwenPolishError } from '../voice/qwen';
 
 export type VoicePhase = 'idle' | 'listening' | 'pending' | 'thinking' | 'speaking';
 /** Voice mode variant. `full` = STT + TTS (hands-free); `input` = STT only,
@@ -52,6 +53,16 @@ export interface VoiceModeOptions {
      *  of the placeholder means "prepend, two newlines between". Empty =
      *  send raw. */
     voicePromptTemplate?: string;
+    /** Preview gate: 'off' = auto-send (default), 'raw' = show captured
+     *  text and wait for sendTrigger confirmation, 'polish' = additionally
+     *  send through Qwen for STT cleanup before showing. */
+    voicePreviewMode?: 'off' | 'raw' | 'polish';
+    /** DashScope API key for Qwen polish (only used when previewMode='polish'). */
+    qwenApiKey?: string;
+    /** Qwen model identifier (e.g. qwen3.6-flash). */
+    qwenModel?: string;
+    /** Extra hint appended to the polish system prompt. */
+    qwenPolishHint?: string;
     /** Strip code blocks from TTS output. */
     skipCode?: boolean;
     /** Play a "ping" cue when a tool call appears in the stream. */
@@ -89,6 +100,20 @@ export interface VoiceModeHandle {
     toggleMode: (kind: VoiceModeKind) => void;
     /** Cancel current TTS and any pending sentences; voice loop returns to listening. */
     stopReading: () => void;
+    /** Preview-before-send state. 'off' means no preview is on screen.
+     *  'polishing' means we're awaiting Qwen cleanup. 'preview' means
+     *  showing the captured text and waiting for the user to confirm. */
+    previewKind: 'off' | 'polishing' | 'preview';
+    /** Raw captured text shown in the preview. Empty when previewKind='off'. */
+    previewRaw: string;
+    /** Polished version from Qwen. Empty when raw mode or polish failed. */
+    previewPolished: string;
+    /** Human-readable error message when polish failed. */
+    previewError?: string;
+    /** Send polished (or raw if no polished) to the agent and dismiss preview. */
+    confirmPreview: () => void;
+    /** Discard the preview without sending. */
+    dismissPreview: () => void;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -511,6 +536,10 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         abortTrigger,
         cancelTrigger,
         voicePromptTemplate,
+        voicePreviewMode = 'off',
+        qwenApiKey,
+        qwenModel = 'qwen-plus',
+        qwenPolishHint,
         skipCode = true,
         toolCue = true,
         onError,
@@ -532,6 +561,13 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
      *  catch misrecognitions before the silence timer fires). Includes
      *  finalised text plus the current interim hypothesis. */
     const [liveTranscript, setLiveTranscript] = useState('');
+    /** Preview-before-send state machine. When voicePreviewMode is 'raw' or
+     *  'polish', silence elapsing doesn't auto-send — it transitions to one
+     *  of these states and waits for the user's explicit confirmation. */
+    const [previewKind, setPreviewKind] = useState<'off' | 'polishing' | 'preview'>('off');
+    const [previewRaw, setPreviewRaw] = useState('');
+    const [previewPolished, setPreviewPolished] = useState('');
+    const [previewError, setPreviewError] = useState<string | undefined>(undefined);
     const suspended = active && (hasInput || hasPermission);
 
     // ── TTS plumbing ────────────────────────────────────────────────────────
@@ -664,6 +700,76 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         setSilenceCountdown(false);
     }, []);
 
+    // ── Preview-before-send plumbing ────────────────────────────────────────
+    /** Lets us abort an in-flight qwen polish call when the user resumes
+     *  speaking or cancels — keeps the polish budget tight. */
+    const polishAbortRef = useRef<AbortController | null>(null);
+    /** Auto-dismiss timer for an idle preview so a long-forgotten preview
+     *  doesn't permanently strand the user out of normal voice flow. */
+    const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const dismissPreview = useCallback(() => {
+        polishAbortRef.current?.abort();
+        polishAbortRef.current = null;
+        if (previewTimeoutRef.current) {
+            clearTimeout(previewTimeoutRef.current);
+            previewTimeoutRef.current = null;
+        }
+        setPreviewKind('off');
+        setPreviewRaw('');
+        setPreviewPolished('');
+        setPreviewError(undefined);
+    }, []);
+
+    /** Shared "actually dispatch to main session" path used by the silence
+     *  timer (auto-send), sendTrigger fast-path, and the preview confirm. */
+    const dispatchToAgent = useCallback((content: string) => {
+        if (!content || !active || suspended) return;
+        const wrapped = applyVoicePromptTemplate(voicePromptTemplate, content);
+        sessionClient.sendInput(sessionId, wrapped);
+        sessionClient.appendOptimisticUser(sessionId, wrapped);
+        setPendingSend(true);
+    }, [active, suspended, voicePromptTemplate, sessionId]);
+
+    const confirmPreview = useCallback(() => {
+        const content = previewPolished || previewRaw;
+        dismissPreview();
+        if (content) dispatchToAgent(content);
+    }, [previewPolished, previewRaw, dismissPreview, dispatchToAgent]);
+
+    const enterPreview = useCallback((raw: string) => {
+        polishAbortRef.current?.abort();
+        polishAbortRef.current = null;
+        setPreviewRaw(raw);
+        setPreviewPolished('');
+        setPreviewError(undefined);
+        // 'raw' mode and 'polish' without an API key both fall back to a
+        // raw-only preview; only 'polish' with a key actually dispatches
+        // the cleanup round-trip.
+        if (voicePreviewMode === 'raw' || !qwenApiKey) {
+            setPreviewKind('preview');
+            return;
+        }
+        setPreviewKind('polishing');
+        const ctrl = new AbortController();
+        polishAbortRef.current = ctrl;
+        polishText(raw, {
+            apiKey: qwenApiKey,
+            model: qwenModel,
+            extraHint: qwenPolishHint,
+            signal: ctrl.signal,
+        }).then((polished) => {
+            if (ctrl.signal.aborted) return;
+            setPreviewPolished(polished);
+            setPreviewKind('preview');
+        }).catch((err: Error) => {
+            if (ctrl.signal.aborted) return;
+            const reason = err instanceof QwenPolishError ? err.kind : 'error';
+            setPreviewError(`润色失败：${reason}（已显示原文，可发送或重来）`);
+            setPreviewKind('preview');
+        });
+    }, [voicePreviewMode, qwenApiKey, qwenModel, qwenPolishHint]);
+
     const stt = useSpeechRecognition({
         lang: voiceLang,
         onTranscript: (text, final) => {
@@ -674,6 +780,32 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 if (merged) setLiveTranscript(merged);
                 return;
             }
+
+            // Preview gate: if a preview is on screen, this final is either
+            // a confirm/cancel command or fresh speech that should retire
+            // the preview. Test triggers against the just-received chunk
+            // (transcriptRef is empty during preview); anything else drops
+            // the preview and falls through to normal capture starting from
+            // this text.
+            if (previewKind !== 'off') {
+                if (sendTrigger) {
+                    const stripped = stripTrailingTrigger(text, sendTrigger);
+                    if (stripped !== null) {
+                        confirmPreview();
+                        return;
+                    }
+                }
+                if (cancelTrigger) {
+                    const cancelNorm = normalizeForTrigger(cancelTrigger);
+                    if (cancelNorm && triggerOccursIn(text, cancelNorm)) {
+                        dismissPreview();
+                        return;
+                    }
+                }
+                dismissPreview();
+                transcriptRef.current = '';
+            }
+
             transcriptRef.current = (transcriptRef.current + ' ' + text).trim();
             setLiveTranscript(transcriptRef.current);
 
@@ -730,8 +862,9 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             }
 
             // Wake-word fast-path: if the user said the configured trigger
-            // at the tail of the utterance, send immediately and skip the
-            // silence wait.
+            // at the tail of the utterance, skip the silence wait. In
+            // preview modes the captured text enters the preview flow
+            // immediately instead of going straight to the agent.
             if (sendTrigger) {
                 const stripped = stripTrailingTrigger(transcriptRef.current, sendTrigger);
                 if (stripped !== null) {
@@ -739,10 +872,8 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                     transcriptRef.current = '';
                     setLiveTranscript('');
                     if (stripped && active && !suspended) {
-                        const wrapped = applyVoicePromptTemplate(voicePromptTemplate, stripped);
-                        sessionClient.sendInput(sessionId, wrapped);
-                        sessionClient.appendOptimisticUser(sessionId, wrapped);
-                        setPendingSend(true);
+                        if (voicePreviewMode !== 'off') enterPreview(stripped);
+                        else dispatchToAgent(stripped);
                     }
                     return;
                 }
@@ -756,12 +887,9 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                 const pending = transcriptRef.current.trim();
                 transcriptRef.current = '';
                 setLiveTranscript('');
-                if (pending && active && !suspended) {
-                    const wrapped = applyVoicePromptTemplate(voicePromptTemplate, pending);
-                    sessionClient.sendInput(sessionId, wrapped);
-                    sessionClient.appendOptimisticUser(sessionId, wrapped);
-                    setPendingSend(true);
-                }
+                if (!pending || !active || suspended) return;
+                if (voicePreviewMode !== 'off') enterPreview(pending);
+                else dispatchToAgent(pending);
             }, silenceMs);
             setSilenceCountdown(true);
         },
@@ -836,8 +964,25 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             cancelSilenceTimer();
             transcriptRef.current = '';
             setLiveTranscript('');
+            dismissPreview();
         }
-    }, [active, suspended, mode, tts, cancelSilenceTimer]);
+    }, [active, suspended, mode, tts, cancelSilenceTimer, dismissPreview]);
+
+    // ── Preview auto-dismiss timeout ───────────────────────────────────────
+    // A forgotten preview shouldn't trap the user out of normal voice flow
+    // forever — drop it after 30s of inactivity.
+    useEffect(() => {
+        if (previewKind === 'off') return;
+        previewTimeoutRef.current = setTimeout(() => {
+            dismissPreview();
+        }, 30_000);
+        return () => {
+            if (previewTimeoutRef.current) {
+                clearTimeout(previewTimeoutRef.current);
+                previewTimeoutRef.current = null;
+            }
+        };
+    }, [previewKind, dismissPreview]);
 
     // ── Session change / unmount: turn off entirely. ────────────────────────
     useEffect(() => {
@@ -947,5 +1092,11 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
         setActive,
         toggleMode,
         stopReading,
+        previewKind,
+        previewRaw,
+        previewPolished,
+        previewError,
+        confirmPreview,
+        dismissPreview,
     };
 }
