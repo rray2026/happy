@@ -111,7 +111,9 @@ export function VoiceLiveTranscript({
                 <div className="voice-live-preview-polished">{polishedLabel}</div>
                 {previewError ? <div className="voice-live-preview-error">{previewError}</div> : null}
                 {previewKind === 'preview' ? (
-                    <div className="voice-live-preview-hint">说「发送」确认 · 说「重来」取消</div>
+                    <div className="voice-live-preview-hint">
+                        说「发送」确认 · 「重来」取消 · 直接继续说话会追加到原文重新润色
+                    </div>
                 ) : null}
             </div>
         );

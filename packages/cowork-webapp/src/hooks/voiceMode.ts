@@ -816,8 +816,17 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
                         return;
                     }
                 }
+                // Fresh speech during preview: append it to the captured raw
+                // and re-enter the preview pipeline. The user is refining,
+                // not retracting — explicit retraction goes through the
+                // cancel trigger above. This also covers the case where the
+                // polished version came back wrong and the user wants to
+                // add context for a better polish pass.
+                const combined = `${previewRaw} ${text}`.trim();
                 dismissPreview();
                 transcriptRef.current = '';
+                if (combined) enterPreview(combined);
+                return;
             }
 
             transcriptRef.current = (transcriptRef.current + ' ' + text).trim();
