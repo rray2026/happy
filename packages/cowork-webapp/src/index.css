@@ -2442,6 +2442,19 @@ button:focus:not(:focus-visible) { outline: none; }
   padding: 0 calc(var(--s-4) + var(--safe-right)) var(--s-1) calc(var(--s-4) + var(--safe-left));
 }
 
+/* Build-info footer at the bottom of the settings page — answers
+ * "did my deploy actually land here?" without opening devtools. */
+.settings-build-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding: var(--s-3) calc(var(--s-4) + var(--safe-right)) var(--s-3) calc(var(--s-4) + var(--safe-left));
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  user-select: text;
+}
+
 .settings-item {
   display: flex;
   align-items: center;

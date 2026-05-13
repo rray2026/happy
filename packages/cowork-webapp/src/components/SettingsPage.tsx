@@ -534,6 +534,11 @@ export function SettingsPage() {
                 </button>
             </div>
 
+            <div className="settings-build-info">
+                <span>Build: {__BUILD_COMMIT__}</span>
+                <span title={__BUILD_TIME__}>· {new Date(__BUILD_TIME__).toLocaleString()}</span>
+            </div>
+
             <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
 
             {transferOpen && (
