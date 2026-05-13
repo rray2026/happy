@@ -67,7 +67,16 @@ export interface SpeechRecognitionHandle {
     supported: boolean;
     listening: boolean;
     start: () => void;
+    /** "Soft" stop — finalises pending interim results before tearing down.
+     *  On iOS Safari this DOESN'T fully release the underlying mic stream,
+     *  leaving the system "microphone in use" indicator on until the engine
+     *  decides it's idle. Use for transient pauses (TTS playback windows)
+     *  where you'll re-start soon. */
     stop: () => void;
+    /** Hard teardown — drops pending results and forces the engine to
+     *  release the mic immediately. Required on iOS Safari to clear the
+     *  mic-in-use system indicator when the user exits voice mode. */
+    abort: () => void;
 }
 
 /**
@@ -125,6 +134,18 @@ export function useSpeechRecognition(opts: Options): SpeechRecognitionHandle {
     const stop = useCallback(() => {
         recognitionRef.current?.stop();
     }, []);
+    const abort = useCallback(() => {
+        const r = recognitionRef.current;
+        if (!r) return;
+        // Belt and suspenders: clear the ref first so any racing onend
+        // doesn't try to setListening(false) a second time, then abort.
+        recognitionRef.current = null;
+        r.onresult = null;
+        r.onerror = null;
+        r.onend = null;
+        try { r.abort(); } catch { /* ignore */ }
+        setListening(false);
+    }, []);
 
     useEffect(() => {
         return () => {
@@ -133,5 +154,5 @@ export function useSpeechRecognition(opts: Options): SpeechRecognitionHandle {
         };
     }, []);
 
-    return { supported, listening, start, stop };
+    return { supported, listening, start, stop, abort };
 }

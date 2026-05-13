@@ -945,7 +945,12 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             cancelSilenceTimer();
             transcriptRef.current = '';
             setLiveTranscript('');
-            if (stt.listening) stt.stop();
+            // Hard teardown (abort, not stop) when truly exiting voice mode
+            // — iOS Safari leaves its system "microphone in use" indicator
+            // on after recognition.stop() and only releases the mic on
+            // abort(). The transient pause for `pendingSend` below still
+            // uses the soft stop because we'll restart immediately.
+            if (stt.listening) stt.abort();
             return;
         }
         const shouldListen = !pendingSend;
