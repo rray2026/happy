@@ -91,24 +91,24 @@ export function VoiceLiveTranscript({
     if (previewKind !== 'off') {
         const polished = previewPolished.trim();
         const raw = previewRaw.trim();
-        const showPolished = !!polished && polished !== raw;
+        // Always render both lines so the user can compare before/after at
+        // a glance — even when the model returned the input unchanged.
+        // What gets sent on confirm is decided in voiceMode.ts
+        // (polished || raw), this is purely display.
+        const polishedSame = polished && polished === raw;
+        const polishedLabel = polishedSame ? '润色：（无变化）' : polished
+            ? `润色：${polished}`
+            : previewKind === 'polishing'
+                ? '润色：处理中…'
+                : '润色：—';
         return (
             <div
                 className={`voice-live-transcript voice-live-preview${previewKind === 'polishing' ? ' voice-live-preview-polishing' : ''}`}
                 role="status"
                 aria-live="polite"
             >
-                {previewKind === 'polishing' ? (
-                    <div className="voice-live-preview-status">AI 润色中…</div>
-                ) : null}
-                {showPolished ? (
-                    <>
-                        <div className="voice-live-preview-raw">原文：{raw}</div>
-                        <div className="voice-live-preview-polished">{polished}</div>
-                    </>
-                ) : (
-                    <div className="voice-live-preview-polished">{raw}</div>
-                )}
+                <div className="voice-live-preview-raw">原文：{raw}</div>
+                <div className="voice-live-preview-polished">{polishedLabel}</div>
                 {previewError ? <div className="voice-live-preview-error">{previewError}</div> : null}
                 {previewKind === 'preview' ? (
                     <div className="voice-live-preview-hint">说「发送」确认 · 说「重来」取消</div>

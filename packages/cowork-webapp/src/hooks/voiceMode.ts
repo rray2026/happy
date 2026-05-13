@@ -787,17 +787,31 @@ export function useVoiceMode(opts: VoiceModeOptions): VoiceModeHandle {
             // (transcriptRef is empty during preview); anything else drops
             // the preview and falls through to normal capture starting from
             // this text.
+            //
+            // Built-in confirm/cancel phrases always work in preview state,
+            // independent of the user's sendTrigger/cancelTrigger settings —
+            // the preview hint promises "说『发送』确认 / 『重来』取消", and
+            // requiring users to also configure global triggers just to make
+            // that hint true was the original bug (the spoken "发送" fell
+            // through to the polish pipeline and round-tripped again).
             if (previewKind !== 'off') {
-                if (sendTrigger) {
-                    const stripped = stripTrailingTrigger(text, sendTrigger);
-                    if (stripped !== null) {
+                const PREVIEW_CONFIRM = ['发送', 'send'];
+                const PREVIEW_CANCEL = ['重来', '取消', 'cancel'];
+                const confirmList = sendTrigger
+                    ? [sendTrigger, ...PREVIEW_CONFIRM]
+                    : PREVIEW_CONFIRM;
+                const cancelList = cancelTrigger
+                    ? [cancelTrigger, ...PREVIEW_CANCEL]
+                    : PREVIEW_CANCEL;
+                for (const phrase of confirmList) {
+                    if (stripTrailingTrigger(text, phrase) !== null) {
                         confirmPreview();
                         return;
                     }
                 }
-                if (cancelTrigger) {
-                    const cancelNorm = normalizeForTrigger(cancelTrigger);
-                    if (cancelNorm && triggerOccursIn(text, cancelNorm)) {
+                for (const phrase of cancelList) {
+                    const tn = normalizeForTrigger(phrase);
+                    if (tn && triggerOccursIn(text, tn)) {
                         dismissPreview();
                         return;
                     }

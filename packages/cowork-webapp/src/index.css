@@ -2669,7 +2669,7 @@ button:focus:not(:focus-visible) { outline: none; }
   opacity: 0.75;
   font-weight: 400;
 }
-.voice-live-preview-polishing .voice-live-preview-status::after {
+.voice-live-preview-polishing .voice-live-preview-polished::after {
   content: '';
   display: inline-block;
   width: 8px;
