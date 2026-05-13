@@ -27,8 +27,7 @@ yarn-error.*
 # Node.js compile cache
 node-compile-cache/
 
-.claude/settings.local.json
-.claude/*.lock
+.claude/
 .plan
 
 CLAUDE.local.md

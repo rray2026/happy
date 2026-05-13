@@ -46,6 +46,18 @@ export interface SessionManagerOptions {
     onPersist?: (session: PersistedSession) => void;
     /** Persistence hook: fires when a session is closed. */
     onPersistRemove?: (sessionId: string) => void;
+    /**
+     * Event-log persistence hooks. When set, every broadcast event is
+     * mirrored to disk via `onPersistEvent`, and rehydrated sessions
+     * reload their saved stream via `loadPersistedEvents` so a process
+     * restart preserves the full chat history (not just the in-memory
+     * window). Both must be supplied together; either one missing
+     * falls back to in-memory only.
+     */
+    onPersistEvent?: (sessionId: string, seq: number, payload: unknown) => void;
+    loadPersistedEvents?: (sessionId: string) => ReadonlyArray<{ seq: number; payload: unknown }>;
+    /** Mirror of `onPersistRemove` for the event log. Called on session close. */
+    onPersistEventRemove?: (sessionId: string) => void;
 
     // Test overrides: fake binaries + env
     claudeCommand?: string;
@@ -167,8 +179,19 @@ export class SessionManager {
             // check is containment, not equality.
             if (!this.isCwdInsideRoot(p.cwd)) continue;
             const entry = this.buildEntry(p);
+            // Replay the persisted event log into the store so a reconnecting
+            // client sees its full conversation history — not just the events
+            // that happened since this process booted. The store keeps only
+            // the last 200 in RAM; everything else stays on disk and is read
+            // back lazily if a client ever needs older events (not yet wired,
+            // but the log makes it possible without further plumbing).
+            const restoredEvents = this.opts.loadPersistedEvents?.(entry.id) ?? [];
+            if (restoredEvents.length > 0) {
+                entry.store.bulkRestore(restoredEvents);
+            }
             logger.debug(
                 `[sessionManager] rehydrated ${entry.id} tool=${entry.tool}` +
+                    ` events=${restoredEvents.length}` +
                     (entry.claudeSessionId ? ` claude=${entry.claudeSessionId}` : '') +
                     (entry.geminiSessionId ? ` gemini=${entry.geminiSessionId}` : ''),
             );
@@ -252,6 +275,7 @@ export class SessionManager {
         this.sessions.delete(sessionId);
         logger.debug(`[sessionManager] closed ${sessionId}`);
         this.opts.onPersistRemove?.(sessionId);
+        this.opts.onPersistEventRemove?.(sessionId);
         this.emitSessionsChanged();
         return true;
     }
@@ -435,6 +459,10 @@ export class SessionManager {
         const entry = this.sessions.get(sessionId);
         if (!entry) return;
         const seq = entry.store.append(payload);
+        // Persist first, broadcast second: if the write throws (out of disk
+        // etc.) the eventLog helper swallows + logs, but we'd still rather
+        // have the disk view match what the client received.
+        this.opts.onPersistEvent?.(sessionId, seq, payload);
         this.opts.onBroadcast(sessionId, seq, payload);
     }
 

@@ -9,7 +9,11 @@ export interface SessionEntry {
  */
 export class SessionStore {
     private readonly entries: SessionEntry[] = [];
-    private readonly maxSize: number;
+    /** Soft cap on resident events. Not readonly: `bulkRestore` lifts it to
+     *  cover the full restored history, so a long-running session that was
+     *  rehydrated from disk doesn't immediately start trimming as new events
+     *  arrive. New sessions stay at the constructor-provided default. */
+    private maxSize: number;
     private nextSeq = 0;
 
     constructor(maxSize = 200) {
@@ -51,5 +55,32 @@ export class SessionStore {
         if (clientSeq < 0) return;
         if (this.nextSeq !== 0) return;
         this.nextSeq = clientSeq + 1;
+    }
+
+    /**
+     * Initialize from a saved event log on agent startup. Adopts the saved
+     * seqs verbatim (rather than re-numbering via `append`) so reconnecting
+     * clients can resume from their existing watermark without seeing the
+     * whole history replayed.
+     *
+     * The buffer cap still applies: only the last `maxSize` events stay
+     * resident; the rest live on disk for forensic purposes. `nextSeq`
+     * advances to `max(seq) + 1` so future appends continue the sequence
+     * monotonically. Only valid on a fresh store (nextSeq === 0).
+     */
+    bulkRestore(events: ReadonlyArray<{ seq: number; payload: unknown }>): void {
+        if (this.nextSeq !== 0) return;
+        if (events.length === 0) return;
+        // Lift the cap to fit the full history. Without this, a long session
+        // would lose anything beyond its tail-of-`maxSize` on restart, and
+        // a reconnecting client with a low `lastSeq` would find a permanent
+        // gap that the per-session circular buffer can never refill.
+        this.maxSize = Math.max(this.maxSize, events.length);
+        let maxSeq = -1;
+        for (const e of events) {
+            this.entries.push({ seq: e.seq, payload: e.payload });
+            if (e.seq > maxSeq) maxSeq = e.seq;
+        }
+        this.nextSeq = maxSeq + 1;
     }
 }

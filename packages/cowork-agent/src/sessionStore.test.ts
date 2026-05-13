@@ -111,4 +111,67 @@ describe('SessionStore', () => {
             expect(s.append('a')).toBe(0);
         });
     });
+
+    describe('bulkRestore', () => {
+        it('restores events with their original seqs', () => {
+            const s = new SessionStore();
+            s.bulkRestore([
+                { seq: 0, payload: 'a' },
+                { seq: 1, payload: 'b' },
+                { seq: 2, payload: 'c' },
+            ]);
+            expect(s.getOldestSeq()).toBe(0);
+            expect(s.getCurrentSeq()).toBe(2);
+        });
+
+        it('advances nextSeq past the highest restored seq', () => {
+            const s = new SessionStore();
+            s.bulkRestore([
+                { seq: 0, payload: 'a' },
+                { seq: 1, payload: 'b' },
+            ]);
+            expect(s.append('next')).toBe(2);
+        });
+
+        it('lifts the cap so the full restored history stays resident', () => {
+            // maxSize 3 is normally tight; bulkRestore with 6 events lifts the
+            // cap to 6 so a low `lastSeq` reconnect can still replay everything.
+            const s = new SessionStore(3);
+            const events = [0, 1, 2, 3, 4, 5].map((i) => ({ seq: i, payload: `e${i}` }));
+            s.bulkRestore(events);
+            expect(s.getOldestSeq()).toBe(0);
+            expect(s.getCurrentSeq()).toBe(5);
+            expect(s.getDelta(-1).map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+        });
+
+        it('keeps the lifted cap effective for subsequent appends', () => {
+            const s = new SessionStore(3);
+            const events = [0, 1, 2, 3, 4].map((i) => ({ seq: i, payload: i }));
+            s.bulkRestore(events);
+            // Cap should now be 5. One more append → 6 entries, only THEN
+            // trimming kicks in.
+            s.append('new');
+            expect(s.getOldestSeq()).toBe(1);
+            expect(s.getCurrentSeq()).toBe(5);
+        });
+
+        it('is a no-op when the store already has events', () => {
+            const s = new SessionStore();
+            s.append('mine'); // nextSeq = 1
+            s.bulkRestore([
+                { seq: 0, payload: 'restored' },
+                { seq: 1, payload: 'also' },
+            ]);
+            // Should not have replaced or extended our own entries.
+            expect(s.getCurrentSeq()).toBe(0);
+            expect(s.getDelta(-1).map((e) => e.payload)).toEqual(['mine']);
+        });
+
+        it('is a no-op on an empty input', () => {
+            const s = new SessionStore();
+            s.bulkRestore([]);
+            expect(s.getCurrentSeq()).toBe(-1);
+            expect(s.append('a')).toBe(0);
+        });
+    });
 });

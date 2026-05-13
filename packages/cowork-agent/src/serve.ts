@@ -6,6 +6,7 @@ import { listDirs, resolveRelPath } from './fsBrowser.js';
 import { logger } from './logger.js';
 import { displayQRCode } from './qrcode.js';
 import { SessionManager, type Tool } from './sessionManager.js';
+import { appendEvent, loadEvents, removeEventLog } from './eventLog.js';
 import { loadAllSessions, removeSession, saveSession } from './sessionStorage.js';
 import type { WsServerHandle } from './types.js';
 import { startWsServer } from './wsServer.js';
@@ -71,6 +72,9 @@ export async function handleServe(opts: ServeOptions): Promise<void> {
         onSessionsChanged: (sessions) => server.pushSessionsChanged(sessions),
         onPersist: (session) => saveSession(sessionsDir, session),
         onPersistRemove: (sid) => removeSession(sessionsDir, sid),
+        onPersistEvent: (sid, seq, payload) => appendEvent(sessionsDir, sid, seq, payload),
+        loadPersistedEvents: (sid) => loadEvents(sessionsDir, sid),
+        onPersistEventRemove: (sid) => removeEventLog(sessionsDir, sid),
         useClaudeChannel,
     });
 
