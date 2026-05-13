@@ -57,9 +57,13 @@ AGENT_ENTRY="$AGENT_ROOT/bin/cowork-agent.mjs"
 # Compose PATH from the dirs containing node and the agent CLI, plus the
 # usual macOS defaults. Keeps the agent's spawn calls (claude / gemini)
 # resolvable even though launchd ignores the user shell environment.
+# `/usr/sbin` is non-optional: gemini-cli probes the system architecture
+# via `execFileSync('sysctl', ...)` without an absolute path, and
+# launchd's default PATH omits sbin entirely — without this entry the
+# whole gemini subprocess dies with `spawnSync sysctl ENOENT`.
 NODE_DIR=$(dirname "$NODE_BIN")
 CLI_DIR=$(dirname "$CLI_BIN")
-LAUNCH_PATH="${NODE_DIR}:${CLI_DIR}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+LAUNCH_PATH="${NODE_DIR}:${CLI_DIR}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 LABEL="com.cowork.agent"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"

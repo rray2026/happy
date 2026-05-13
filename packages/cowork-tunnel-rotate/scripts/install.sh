@@ -106,7 +106,7 @@ write_plist() {
     <key>StandardErrorPath</key><string>/tmp/${label}.err</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TUNNEL_NAME</key><string>${TUNNEL_NAME}</string>
         <key>LOCAL_URL</key><string>${LOCAL_URL}</string>
         <key>ROTATE_SECONDS</key><string>${ROTATE_SECONDS}</string>
