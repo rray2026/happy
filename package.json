@@ -4,6 +4,7 @@
     "workspaces": {
         "packages": [
             "packages/cowork-agent",
+            "packages/cowork-tunnel-rotate",
             "packages/cowork-webapp",
             "packages/integration-tests"
         ]

@@ -1,0 +1,10 @@
+{
+    "name": "cowork-tunnel-rotate",
+    "version": "1.0.0",
+    "private": true,
+    "description": "macOS launchd agent that keeps a cloudflared tunnel up for cowork-agent and rotates it on a fixed interval",
+    "scripts": {
+        "install:agent": "./scripts/install.sh",
+        "uninstall:agent": "./scripts/uninstall.sh"
+    }
+}
